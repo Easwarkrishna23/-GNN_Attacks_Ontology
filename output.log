@@ -1,0 +1,227 @@
+/Users/easwarkrishnaap/Desktop/ADVERSARIAL ATTACK PROJECT/main.py:59: UserWarning: Creating a tensor from a list of numpy.ndarrays is extremely slow. Please consider converting the list to a single numpy.ndarray with numpy.array() before converting to a tensor. (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/utils/tensor_new.cpp:256.)
+  data_rnd.edge_index = torch.tensor([r, c], dtype=torch.long)
+/opt/miniconda3/lib/python3.13/site-packages/deeprobust/graph/utils.py:356: UserWarning: torch.sparse.SparseTensor(indices, values, shape, *, device=) is deprecated.  Please use torch.sparse_coo_tensor(indices, values, shape, dtype=, device=). (Triggered internally at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/utils/tensor_new.cpp:656.)
+  return torch.sparse.FloatTensor(sparseconcat.t(),sparsedata,torch.Size(sparse_mx.shape))
+=== STARTING REFINED EXPERIMENTAL PIPELINE ===
+Dataset: Cora
+Number of nodes: 2708
+Number of edges: 10556
+Number of features: 1433
+Number of classes: 7
+Dataset: Cora
+Number of nodes: 2708
+Number of edges: 10556
+Number of features: 1433
+Number of classes: 7
+
+Training GCN Baseline...
+Epoch 000, Loss: 1.9467
+Epoch 020, Loss: 1.7553
+Epoch 040, Loss: 1.4090
+Epoch 060, Loss: 1.0510
+Epoch 080, Loss: 0.8913
+Epoch 100, Loss: 0.7180
+Epoch 120, Loss: 0.6138
+Epoch 140, Loss: 0.5379
+Epoch 160, Loss: 0.4563
+Epoch 180, Loss: 0.4436
+GCN Baseline Metrics: {'accuracy': 0.81, 'precision': 0.7915603822201377, 'recall': 0.811616145401951, 'f1_macro': 0.7994707662346567, 'f1_micro': 0.81, 'roc_auc': 0.9638225435913083}
+
+Training GAT Baseline...
+Epoch 000, Loss: 1.9470
+Epoch 020, Loss: 1.6001
+Epoch 040, Loss: 1.0961
+Epoch 060, Loss: 0.8813
+Epoch 080, Loss: 0.7059
+Epoch 100, Loss: 0.7907
+Epoch 120, Loss: 0.7101
+Epoch 140, Loss: 0.6307
+Epoch 160, Loss: 0.5755
+Epoch 180, Loss: 0.5998
+GAT Baseline Metrics: {'accuracy': 0.812, 'precision': 0.7934929223486754, 'recall': 0.816663230560292, 'f1_macro': 0.8003343339025611, 'f1_micro': 0.812, 'roc_auc': 0.9728072976439327}
+
+[Poisoning Attacks] Retraining required...
+Running Random Edge Injection Poisoning...
+Epoch 000, Loss: 1.9462
+Epoch 020, Loss: 1.7102
+Epoch 040, Loss: 1.3154
+Epoch 060, Loss: 0.9643
+Epoch 080, Loss: 0.7179
+Running Nettack Poisoning (Targeted)...
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+##### Starting attack #####
+##### Attack only using structure perturbations #####
+##### Attacking the node directly #####
+##### Performing 5 perturbations #####
+##### ...1/5 perturbations ... #####
+##### ...2/5 perturbations ... #####
+##### ...3/5 perturbations ... #####
+##### ...4/5 perturbations ... #####
+##### ...5/5 perturbations ... #####
+Epoch 000, Loss: 1.9456
+Epoch 020, Loss: 1.6883
+Epoch 040, Loss: 1.3036
+Epoch 060, Loss: 0.9425
+Epoch 080, Loss: 0.7172
+Running Metattack (Global Poisoning)...
+Perturbing graph:   0%|          | 0/200 [00:00<?, ?it/s]Perturbing graph:   0%|          | 0/200 [01:01<?, ?it/s]
+GCN loss on unlabled data: 1.1966551542282104
+GCN acc on unlabled data: 0.5864485981308412
+Traceback (most recent call last):
+  File "/Users/easwarkrishnaap/Desktop/ADVERSARIAL ATTACK PROJECT/main.py", line 153, in <module>
+    main()
+    ~~~~^^
+  File "/Users/easwarkrishnaap/Desktop/ADVERSARIAL ATTACK PROJECT/main.py", line 80, in main
+    mod_adj_meta, _ = run_metattack(adj, features, labels, idx_train, n_perturbations=200)
+                      ~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/easwarkrishnaap/Desktop/ADVERSARIAL ATTACK PROJECT/attacks/poisoning/metattack.py", line 26, in run_metattack
+    model.attack(features, adj, labels, idx_train, idx_unlabeled, n_perturbations=n_perturbations)
+    ~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/miniconda3/lib/python3.13/site-packages/deeprobust/graph/global_attack/mettack.py", line 554, in attack
+    adj_meta_score = self.get_adj_score(self.adj_grad_sum, modified_adj, ori_adj, ll_constraint, ll_cutoff)
+  File "/opt/miniconda3/lib/python3.13/site-packages/deeprobust/graph/global_attack/mettack.py", line 136, in get_adj_score
+    allowed_mask, self.ll_ratio = self.log_likelihood_constraint(modified_adj, ori_adj, ll_cutoff)
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/miniconda3/lib/python3.13/site-packages/deeprobust/graph/global_attack/mettack.py", line 119, in log_likelihood_constraint
+    allowed_mask, current_ratio = utils.likelihood_ratio_filter(t_possible_edges,
+                                  ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^
+                                                                modified_adj,
+                                                                ^^^^^^^^^^^^^
+                                                                ori_adj, t_d_min,
+                                                                ^^^^^^^^^^^^^^^^^
+                                                                ll_cutoff, undirected=self.undirected)
+                                                                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/miniconda3/lib/python3.13/site-packages/deeprobust/graph/utils.py", line 579, in likelihood_ratio_filter
+    concat_degree_sequence = torch.cat((current_degree_sequence, original_degree_sequence))
+NotImplementedError: Could not run 'aten::_values' with arguments from the 'CPU' backend. This could be because the operator doesn't exist for this backend, or was omitted during the selective/custom build process (if using custom build). If you are a Facebook employee using PyTorch on mobile, please visit https://fburl.com/ptmfixes for possible resolutions. 'aten::_values' is only available for these backends: [MPS, Meta, SparseCPU, SparseMPS, SparseMeta, BackendSelect, Python, FuncTorchDynamicLayerBackMode, Functionalize, Named, Conjugate, Negative, ZeroTensor, ADInplaceOrView, AutogradOther, AutogradCPU, AutogradCUDA, AutogradHIP, AutogradXLA, AutogradMPS, AutogradIPU, AutogradXPU, AutogradHPU, AutogradVE, AutogradLazy, AutogradMTIA, AutogradMAIA, AutogradPrivateUse1, AutogradPrivateUse2, AutogradPrivateUse3, AutogradMeta, AutogradNestedTensor, Tracer, AutocastCPU, AutocastMTIA, AutocastMAIA, AutocastXPU, AutocastMPS, AutocastCUDA, FuncTorchBatched, BatchedNestedTensor, FuncTorchVmapMode, Batched, VmapMode, FuncTorchGradWrapper, PythonTLSSnapshot, FuncTorchDynamicLayerFrontMode, PreDispatch, PythonDispatcher].
+
+MPS: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/mps/MPSFallback.mm:79 [backend fallback]
+Meta: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/MetaFallbackKernel.cpp:23 [backend fallback]
+SparseCPU: registered at /Users/runner/work/pytorch/pytorch/pytorch/build/aten/src/ATen/RegisterSparseCPU_0.cpp:2927 [kernel]
+SparseMPS: registered at /Users/runner/work/pytorch/pytorch/pytorch/build/aten/src/ATen/RegisterSparseMPS_0.cpp:1837 [kernel]
+SparseMeta: registered at /Users/runner/work/pytorch/pytorch/pytorch/build/aten/src/ATen/RegisterSparseMeta_0.cpp:556 [kernel]
+BackendSelect: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/BackendSelectFallbackKernel.cpp:3 [backend fallback]
+Python: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/PythonFallbackKernel.cpp:194 [backend fallback]
+FuncTorchDynamicLayerBackMode: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/DynamicLayer.cpp:479 [backend fallback]
+Functionalize: registered at /Users/runner/work/pytorch/pytorch/pytorch/build/aten/src/ATen/RegisterFunctionalization_3.cpp:26659 [kernel]
+Named: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/NamedRegistrations.cpp:7 [backend fallback]
+Conjugate: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/ConjugateFallback.cpp:17 [backend fallback]
+Negative: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/native/NegateFallback.cpp:18 [backend fallback]
+ZeroTensor: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/ZeroTensorFallback.cpp:115 [backend fallback]
+ADInplaceOrView: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/ADInplaceOrViewType_1.cpp:5408 [kernel]
+AutogradOther: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradCPU: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradCUDA: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradHIP: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradXLA: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradMPS: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradIPU: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradXPU: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradHPU: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradVE: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradLazy: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradMTIA: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradMAIA: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradPrivateUse1: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradPrivateUse2: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradPrivateUse3: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradMeta: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+AutogradNestedTensor: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/VariableType_3.cpp:19687 [autograd kernel]
+Tracer: registered at /Users/runner/work/pytorch/pytorch/pytorch/torch/csrc/autograd/generated/TraceType_3.cpp:15107 [kernel]
+AutocastCPU: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:324 [backend fallback]
+AutocastMTIA: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:468 [backend fallback]
+AutocastMAIA: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:506 [backend fallback]
+AutocastXPU: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:544 [backend fallback]
+AutocastMPS: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:209 [backend fallback]
+AutocastCUDA: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/autocast_mode.cpp:165 [backend fallback]
+FuncTorchBatched: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/LegacyBatchingRegistrations.cpp:731 [backend fallback]
+BatchedNestedTensor: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/LegacyBatchingRegistrations.cpp:758 [backend fallback]
+FuncTorchVmapMode: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/VmapModeRegistrations.cpp:27 [backend fallback]
+Batched: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/LegacyBatchingRegistrations.cpp:1075 [backend fallback]
+VmapMode: fallthrough registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/VmapModeRegistrations.cpp:33 [backend fallback]
+FuncTorchGradWrapper: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/TensorWrapper.cpp:210 [backend fallback]
+PythonTLSSnapshot: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/PythonFallbackKernel.cpp:202 [backend fallback]
+FuncTorchDynamicLayerFrontMode: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/functorch/DynamicLayer.cpp:475 [backend fallback]
+PreDispatch: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/PythonFallbackKernel.cpp:206 [backend fallback]
+PythonDispatcher: registered at /Users/runner/work/pytorch/pytorch/pytorch/aten/src/ATen/core/PythonFallbackKernel.cpp:198 [backend fallback]
+

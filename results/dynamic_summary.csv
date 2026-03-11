@@ -1,0 +1,5 @@
+Attack,Accuracy
+Baseline,0.1206896551724138
+Evasion: Feature,0.15517241379310345
+Defense: Feature Smoothing,0.1724137931034483
+Defense: Ontology,0.13793103448275862
