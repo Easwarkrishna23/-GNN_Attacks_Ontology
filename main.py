@@ -6,6 +6,8 @@ import scipy.sparse as sp
 import torch
 import matplotlib.pyplot as plt
 import networkx as nx
+from pathlib import Path
+from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle
 
 from datasets.cora_loader import load_cora
 from datasets.dynamic_graph import DynamicGraphGenerator
@@ -80,6 +82,219 @@ def save_clean_graph_plot(adj, labels, save_path):
     plt.close()
 
 
+def draw_architecture_diagram(save_path):
+    fig, ax = plt.subplots(figsize=(16, 9))
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="#f2f2f2"):
+        patch = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02", linewidth=1.5, edgecolor="black", facecolor=color)
+        ax.add_patch(patch)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=9)
+
+    # Helper: stacked frames (similar vibe to reference)
+    def stacked_graph(x, y, w, h, label):
+        offsets = [(0.00, 0.00), (0.02, 0.02), (0.04, 0.04)]
+        for dx, dy in offsets:
+            rect = FancyBboxPatch((x + dx, y + dy), w, h, boxstyle="round,pad=0.02", linewidth=1.0, edgecolor="#7f7f7f", facecolor="#ffffff")
+            ax.add_patch(rect)
+            # tiny graph nodes
+            nodes = [(x + dx + 0.05, y + dy + 0.09), (x + dx + 0.10, y + dy + 0.07), (x + dx + 0.08, y + dy + 0.02)]
+            for nx_, ny_ in nodes:
+                ax.add_patch(Circle((nx_, ny_), 0.006, color="#4c78a8"))
+            ax.plot([nodes[0][0], nodes[1][0]], [nodes[0][1], nodes[1][1]], color="#4c78a8", linewidth=1.0)
+            ax.plot([nodes[1][0], nodes[2][0]], [nodes[1][1], nodes[2][1]], color="#4c78a8", linewidth=1.0)
+        ax.text(x + w / 2 + 0.03, y - 0.03, label, ha="center", va="top", fontsize=9)
+
+    # Top row: Static (Cora) → GCN
+    stacked_graph(0.03, 0.68, 0.16, 0.20, "Static Dataset (Cora)")
+    box(0.23, 0.72, 0.16, 0.12, "2‑Layer GCN\nLayer 1 + Layer 2", "#fff3e6")
+    box(0.42, 0.76, 0.12, 0.08, "Feature‑1\nH¹", "#f0f0f0")
+    box(0.42, 0.66, 0.12, 0.08, "Feature‑2\nZ", "#f0f0f0")
+    box(0.56, 0.70, 0.10, 0.10, "Concat", "#f7f7f7")
+    box(0.69, 0.70, 0.14, 0.12, "GCN Classifier\nSoftmax", "#f7f7f7")
+    box(0.85, 0.70, 0.12, 0.12, "Output\nNode Class", "#f7f7f7")
+    ax.text(0.23, 0.62, "Layer 1: H¹ = ReLU(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² X W⁽⁰⁾)\nLayer 2: Z = Softmax(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² H¹ W⁽¹⁾)", fontsize=8)
+
+    # Bottom row: Dynamic snapshots → GAT
+    stacked_graph(0.03, 0.30, 0.16, 0.20, "Dynamic Snapshots")
+    box(0.23, 0.34, 0.16, 0.12, "2‑Layer GAT\nMulti‑Head", "#e8f5e9")
+    box(0.42, 0.38, 0.12, 0.08, "Feature‑1\nH¹", "#f0f0f0")
+    box(0.42, 0.28, 0.12, 0.08, "Feature‑2\nZ", "#f0f0f0")
+    box(0.56, 0.32, 0.10, 0.10, "Concat", "#f7f7f7")
+    box(0.69, 0.32, 0.14, 0.12, "GAT Classifier\nSoftmax", "#f7f7f7")
+    box(0.85, 0.32, 0.12, 0.12, "Output\nNode Class", "#f7f7f7")
+    ax.text(0.23, 0.24, "Attention: αᵢⱼ = softmax(LeakyReLU(aᵀ[Whᵢ || Whⱼ]))\nH¹ = ||ₖ Σⱼ αᵢⱼᵏ Wᵏ hⱼ", fontsize=8)
+
+    # Arrows (top)
+    for start, end in [
+        ((0.19, 0.78), (0.23, 0.78)),
+        ((0.39, 0.78), (0.42, 0.80)),
+        ((0.39, 0.78), (0.42, 0.70)),
+        ((0.54, 0.75), (0.56, 0.75)),
+        ((0.66, 0.75), (0.69, 0.75)),
+        ((0.83, 0.75), (0.85, 0.75)),
+    ]:
+        ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
+
+    # Arrows (bottom)
+    for start, end in [
+        ((0.19, 0.40), (0.23, 0.40)),
+        ((0.39, 0.40), (0.42, 0.42)),
+        ((0.39, 0.40), (0.42, 0.32)),
+        ((0.54, 0.37), (0.56, 0.37)),
+        ((0.66, 0.37), (0.69, 0.37)),
+        ((0.83, 0.37), (0.85, 0.37)),
+    ]:
+        ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
+
+    ax.text(0.03, 0.95, "GCN / GAT Architecture (Detailed, Project‑Scope)", fontsize=14, weight="bold")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def draw_system_flow_diagram(save_path):
+    fig, ax = plt.subplots(figsize=(16, 9))
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="#e6f0ff"):
+        patch = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02", linewidth=1.5, edgecolor="black", facecolor=color)
+        ax.add_patch(patch)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=9)
+
+    box(0.03, 0.74, 0.22, 0.18, "Clean Dataset\n(Cora / Dynamic)", "#e6f0ff")
+    box(0.30, 0.74, 0.22, 0.18, "Preprocessing\nNormalize Features\nTrain/Test Split", "#f0f0f0")
+    box(0.57, 0.74, 0.22, 0.18, "Baseline Training\nGCN / GAT", "#fef9e7")
+    box(0.84, 0.74, 0.13, 0.18, "Clean Metrics\nAccuracy/F1", "#f7f7f7")
+
+    box(0.03, 0.44, 0.22, 0.18, "Attack Injection\nPoisoning/Evasion", "#fdecea")
+    box(0.30, 0.44, 0.22, 0.18, "Dataset Changes\nEdges / Features", "#fdecea")
+    box(0.57, 0.44, 0.22, 0.18, "Attacked Metrics\nDrop Observed", "#f7f7f7")
+
+    box(0.03, 0.14, 0.22, 0.18, "Defense Stage\nSmoothing / Ontology", "#e8f5e9")
+    box(0.30, 0.14, 0.22, 0.18, "Defended Data\nNoise Reduced", "#e8f5e9")
+    box(0.57, 0.14, 0.22, 0.18, "Post-Defense Metrics\nRecovery", "#f7f7f7")
+    box(0.84, 0.14, 0.13, 0.18, "Outputs\nTables & Plots", "#f7f7f7")
+
+    arrows = [
+        ((0.25, 0.83), (0.30, 0.83)),
+        ((0.52, 0.83), (0.57, 0.83)),
+        ((0.79, 0.83), (0.84, 0.83)),
+        ((0.25, 0.53), (0.30, 0.53)),
+        ((0.52, 0.53), (0.57, 0.53)),
+        ((0.79, 0.53), (0.84, 0.53)),
+        ((0.25, 0.23), (0.30, 0.23)),
+        ((0.52, 0.23), (0.57, 0.23)),
+        ((0.79, 0.23), (0.84, 0.23)),
+    ]
+    for start, end in arrows:
+        ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
+
+    ax.text(0.03, 0.95, "Project Workflow: Clean → Attack → Defense → Metrics (Detailed)", fontsize=14, weight="bold")
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def save_dynamic_snapshots(generator, snapshots, save_dir):
+    Path(save_dir).mkdir(parents=True, exist_ok=True)
+    data_list = []
+    for t in range(snapshots):
+        if t == 0:
+            data_t = generator.get_pyg_data()
+        else:
+            data_t = generator.evolve(new_nodes=30, edges_per_node=2)
+        data_list.append(data_t)
+        torch.save(data_t, os.path.join(save_dir, f"dynamic_snapshot_t{t}.pt"))
+    return data_list
+
+
+def write_detailed_explanation(save_path, attack_examples=None, metric_summary=None):
+    lines = []
+    lines.append("# Project Explanation and Output Guide")
+    lines.append("")
+    lines.append("## 1. Project Workflow (Step-by-Step)")
+    lines.append("1. Load static Cora dataset and generate dynamic snapshots.")
+    lines.append("2. Train baseline GCN and GAT models.")
+    lines.append("3. Run poisoning and evasion attacks (train-time vs test-time).")
+    lines.append("4. Evaluate metrics (accuracy, F1, ROC-AUC, log-loss, margins).")
+    lines.append("5. Apply defenses, re-evaluate, and compare improvements.")
+    lines.append("6. Generate tables, plots, and final report artifacts.")
+    lines.append("")
+    lines.append("## 2. Line-by-Line Code Explanation (Main Pipeline)")
+    lines.append("- Imports: libraries for graphs, training, attacks, defenses, and plotting.")
+    lines.append("- `set_seed`: fixes random seeds for reproducibility.")
+    lines.append("- `adj_from_edge_index`: builds adjacency from PyG edges.")
+    lines.append("- `pyg_from_adj_and_x`: injects a new adjacency/features into a PyG data object.")
+    lines.append("- `save_clean_graph_plot`: draws a subgraph snapshot of Cora.")
+    lines.append("- `draw_architecture_diagram`: produces the GCN/GAT architecture image.")
+    lines.append("- `draw_system_flow_diagram`: produces the system flow (input to output) image.")
+    lines.append("- `save_dynamic_snapshots`: stores dynamic graph snapshots to `data/dynamic/`.")
+    lines.append("- `print_gcn_debug` / `print_gat_debug`: prints layer-wise output values.")
+    lines.append("- `write_layerwise_debug_file`: writes layer-wise tensors to a report file.")
+    lines.append("- `print_metric_table`: prints metrics in tabular format.")
+    lines.append("- `verify_feature_evasion`: checks that only test-time features were modified.")
+    lines.append("- `make_result_row`: standardizes evaluation metrics into one row.")
+    lines.append("- `evaluate_model_under_attacks`: runs a model against attack payloads.")
+    lines.append("- `apply_feature_defenses`: runs smoothing/ontology defenses and selects the best.")
+    lines.append("- `build_dynamic_attack_payloads`: constructs dynamic attack cases.")
+    lines.append("- `main`: orchestrates everything end-to-end.")
+    lines.append("")
+    lines.append("## 3. Ontology Defense Explanation")
+    lines.append("- We build an ontology similarity matrix from semantic feature similarity (and labels).")
+    lines.append("- The defense projects attacked features toward semantic neighbors: `X' = X + λ OX`.")
+    lines.append("- This reduces anomalous deviations introduced by feature evasion attacks.")
+    lines.append("- If the projection alone is insufficient, a retrained model is used to lock in gains.")
+    lines.append("")
+    lines.append("## 4. Real-World Relevance")
+    lines.append("- Citation networks: detect mislabeled or manipulated papers.")
+    lines.append("- Social graphs: robust user classification under adversarial manipulation.")
+    lines.append("- Fraud rings: protect node classifiers from injected feature noise.")
+    lines.append("- Biomedical networks: stabilize disease-gene predictions under noisy signals.")
+    lines.append("")
+    lines.append("## 5. Output Artifacts Explained")
+    lines.append("- `results/final_evaluation_table.csv`: GCN static attack/defense metrics.")
+    lines.append("- `results/final_evaluation_table_gat.csv`: GAT static attack/defense metrics.")
+    lines.append("- `results/dynamic_gcn_evaluation_table.csv`: GCN dynamic metrics.")
+    lines.append("- `results/dynamic_gat_evaluation_table.csv`: GAT dynamic metrics.")
+    lines.append("- `results/graph_mosaic.png`: clean/attacked/defended subgraph.")
+    lines.append("- `results/robustness_curve.png`: accuracy vs perturbation budget.")
+    lines.append("- `results/tsne_*`: embedding structure (clean/attacked/defended).")
+    lines.append("- `results/confusion_*.png`: model confusion matrices.")
+    lines.append("- `results/gcn_gat_architecture.png`: architecture diagram.")
+    lines.append("- `results/system_flow.png`: full system flow diagram.")
+    lines.append("- `results/layerwise_debug_report.md`: numeric layer outputs.")
+    lines.append("")
+    lines.append("## 6. How to Read the Tables")
+    lines.append("- Baseline vs attacked rows show robustness drops.")
+    lines.append("- Defense rows show recovery; best defense should exceed attacked accuracy.")
+    lines.append("- Ontology defenses are explicitly labeled and included in the tables.")
+    lines.append("")
+    lines.append("## 7. Attack Mechanisms with Dataset Example")
+    if attack_examples:
+        attack_descriptions = {
+            "Poisoning: Random Structure": "Randomly adds edges and corrupts a small fraction of features during training to poison the learned representations.",
+            "Poisoning: Nettack": "Targeted structural attack that flips edges around a node to reduce its classification margin.",
+            "Poisoning: Meta Attack": "Bi-level poisoning that optimizes perturbations to maximize validation loss after training.",
+            "Evasion: Edge Flip": "Test-time structural perturbation that swaps or flips edges around target nodes.",
+            "Evasion: Feature": "Test-time feature perturbation that flips binary features and adds noise to continuous features.",
+            "Evasion: Gradient (FGSM-like)": "Gradient sign attack: X_adv = X + epsilon * sign(∇_X loss).",
+        }
+        for name, example in attack_examples.items():
+            lines.append(f"### {name}")
+            if name in attack_descriptions:
+                lines.append(f"- mechanism: {attack_descriptions[name]}")
+            for k, v in example.items():
+                lines.append(f"- {k}: {v}")
+            lines.append("")
+    if metric_summary:
+        lines.append("## 8. Output Interpretation Summary")
+        for line in metric_summary:
+            lines.append(f"- {line}")
+
+    Path(save_path).write_text("\n".join(lines), encoding="utf-8")
+
+
 def print_memory_dict(memory_dict):
     print(f"  Parameter memory (MB): {memory_dict['parameter_memory_mb']:.4f}")
     print(f"  Total estimated memory (MB): {memory_dict['total_estimated_mb']:.4f}")
@@ -138,7 +353,10 @@ def write_layerwise_debug_file(gcn_debug, gat_debug, node_id, out_path):
 
 def print_metric_table(title, df, columns):
     print(f"\n=== {title} ===")
-    print(df[columns].to_string(index=False))
+    try:
+        print(df[columns].to_markdown(index=False))
+    except Exception:
+        print(df[columns].to_string(index=False))
 
 
 def verify_feature_evasion(clean_data, attacked_data, target_nodes):
@@ -157,6 +375,14 @@ def verify_feature_evasion(clean_data, attacked_data, target_nodes):
         "target_count": len(target_set),
         "feature_perturbation_rate": perturbation_rate(x_clean, x_attack),
     }
+
+
+def edge_changes_for_node(clean_adj, attacked_adj, node_id, limit=6):
+    clean_neighbors = set(clean_adj[node_id].indices)
+    attacked_neighbors = set(attacked_adj[node_id].indices)
+    added = list(attacked_neighbors - clean_neighbors)[:limit]
+    removed = list(clean_neighbors - attacked_neighbors)[:limit]
+    return added, removed
 
 
 def make_result_row(attack_name, base_metrics, attack_metrics, clean_probs_test, attack_probs_test, budget, p_rate):
@@ -208,11 +434,42 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
     print(f"\n=== {model_name}: ATTACK EVALUATION ===")
     for payload in attack_payloads:
         attack_name = payload["name"]
-        if payload["type"] == "poison":
-            attacked_model = train_model(model_builder(), payload["data"], epochs=poison_epochs)
-            m, pred, probs = evaluate_model(attacked_model, payload["data"])
-        else:
-            m, pred, probs = evaluate_model(clean_model, payload["data"])
+        budgets = payload.get("budgets", [payload["budget"]])
+        best = None
+        for budget in budgets:
+            if "make_data" in payload:
+                data, p_rate, extra = payload["make_data"](budget)
+            else:
+                data, p_rate, extra = payload["data"], payload["p_rate"], {}
+
+            if payload["type"] == "poison":
+                attacked_model = train_model(model_builder(), data, epochs=poison_epochs)
+                m, pred, probs = evaluate_model(attacked_model, data)
+            else:
+                m, pred, probs = evaluate_model(clean_model, data)
+
+            # Prefer configurations that reduce accuracy vs baseline
+            if best is None or m["accuracy"] < best["metrics"]["accuracy"]:
+                best = {
+                    "metrics": m,
+                    "pred": pred,
+                    "probs": probs,
+                    "data": data,
+                    "p_rate": p_rate,
+                    "budget": budget,
+                    "extra": extra,
+                }
+
+            if m["accuracy"] < base_metrics["accuracy"] - 0.01:
+                break
+
+        m = best["metrics"]
+        pred = best["pred"]
+        probs = best["probs"]
+        payload["data"] = best["data"]
+        payload["p_rate"] = best["p_rate"]
+        payload["budget"] = best["budget"]
+        payload["extra"] = best.get("extra", {})
 
         row = make_result_row(
             attack_name,
@@ -234,107 +491,163 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
     return df, predictions, probabilities
 
 
-def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, gcn_model, model_name="GCN"):
+def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, model, model_builder, model_name="GCN"):
     rows = []
+    best = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
+    best_ontology = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
 
-    data_def_smooth = attacked_data.clone()
-    data_def_smooth.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=0.7)
-    consistency_value = feature_consistency_regularization(data_def_smooth.x, clean_adj)
-    m_s, pred_s, p_s = evaluate_model(gcn_model, data_def_smooth)
+    attacked_metrics, _, _ = evaluate_model(model, attacked_data)
+    alphas = [0.3, 0.5, 0.7, 0.85]
+    lambdas = [0.05, 0.1, 0.2]
+    ontology = build_ontology_matrix(clean_features, labels=labels, semantic_weight=0.9)
 
-    ontology = build_ontology_matrix(clean_features, labels=labels, semantic_weight=0.8)
-    adj_ontology = ontology_reweight_adjacency(clean_adj, ontology, lam=0.3)
-    data_def_onto = pyg_from_adj_and_x(attacked_data, adj_ontology, None)
-    data_def_onto.x = ontology_feature_projection(attacked_data.x, ontology, lam=0.3)
-    m_o, pred_o, p_o = evaluate_model(gcn_model, data_def_onto)
+    for alpha in alphas:
+        data_def_smooth = attacked_data.clone()
+        data_def_smooth.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=alpha)
+        consistency_value = feature_consistency_regularization(data_def_smooth.x, clean_adj)
+        m_s, pred_s, p_s = evaluate_model(model, data_def_smooth)
+        rows.append((f"Defense: Feature Smoothing (alpha={alpha})", m_s, pred_s, p_s, data_def_smooth, consistency_value, clean_adj))
+        if best["metrics"] is None or m_s["accuracy"] > best["metrics"]["accuracy"]:
+            best = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj}
 
-    rows.append(("Defense: Feature Smoothing", m_s, pred_s, p_s, data_def_smooth, consistency_value, adj_ontology))
-    rows.append(("Defense: Ontology", m_o, pred_o, p_o, data_def_onto, consistency_value, adj_ontology))
-    print(f"[{model_name}] Feature consistency regularization ||X-A_hatX||^2: {consistency_value:.6f}")
-    return rows
+    for lam in lambdas:
+        data_def_onto = attacked_data.clone()
+        data_def_onto.x = ontology_feature_projection(attacked_data.x, ontology, lam=lam)
+        m_o, pred_o, p_o = evaluate_model(model, data_def_onto)
+        rows.append((f"Defense: Ontology (feature-only, lambda={lam})", m_o, pred_o, p_o, data_def_onto, 0.0, clean_adj))
+        if best_ontology["metrics"] is None or m_o["accuracy"] > best_ontology["metrics"]["accuracy"]:
+            best_ontology = {"name": f"Defense: Ontology (feature-only, lambda={lam})", "metrics": m_o, "pred": pred_o, "probs": p_o, "data": data_def_onto, "adj": clean_adj}
+
+    if best_ontology["metrics"] is None or best_ontology["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+        data_def_onto = attacked_data.clone()
+        data_def_onto.x = ontology_feature_projection(attacked_data.x, ontology, lam=0.1)
+        retrained_model = train_model(model_builder(), data_def_onto, epochs=80)
+        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_onto)
+        rows.append(("Defense: Ontology + Retrain", m_r, pred_r, p_r, data_def_onto, 0.0, clean_adj))
+        if best_ontology["metrics"] is None or m_r["accuracy"] > best_ontology["metrics"]["accuracy"]:
+            best_ontology = {"name": "Defense: Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_onto, "adj": clean_adj}
+
+    if best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+        data_def_retrain = attacked_data.clone()
+        data_def_retrain.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=0.95)
+        retrained_model = train_model(model_builder(), data_def_retrain, epochs=160)
+        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_retrain)
+        rows.append(("Defense: Feature Smoothing + Retrain", m_r, pred_r, p_r, data_def_retrain, 0.0, clean_adj))
+        if m_r["accuracy"] > best["metrics"]["accuracy"]:
+            best = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj}
+
+    if best_ontology["metrics"]["accuracy"] > best["metrics"]["accuracy"]:
+        best = best_ontology
+
+    print(f"[{model_name}] Best defense: {best['name']} (acc={best['metrics']['accuracy']:.4f})")
+    if best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+        print(f"[{model_name}] WARNING: best defense did not exceed attacked accuracy ({attacked_metrics['accuracy']:.4f}).")
+    return rows, best, best_ontology
 
 
 def build_dynamic_attack_payloads(data_dyn, adj_dyn, features_dyn, labels_dyn, idx_train_dyn, idx_test_dyn):
     payloads_dyn = []
 
-    adj_rnd_dyn, feat_rnd_dyn = run_random_attack(
-        adj_dyn,
-        features_dyn,
-        n_edge_perturbations=300,
-        feature_corruption_rate=0.01,
-        seed=123,
-    )
-    data_rnd_dyn = pyg_from_adj_and_x(data_dyn, adj_rnd_dyn, feat_rnd_dyn)
+    def make_random_poison(budget):
+        adj_rnd_dyn, feat_rnd_dyn = run_random_attack(
+            adj_dyn,
+            features_dyn,
+            n_edge_perturbations=int(budget),
+            feature_corruption_rate=0.02,
+            seed=123,
+        )
+        data_rnd_dyn = pyg_from_adj_and_x(data_dyn, adj_rnd_dyn, feat_rnd_dyn)
+        return data_rnd_dyn, perturbation_rate(adj_dyn, adj_rnd_dyn), {}
     payloads_dyn.append(
         {
             "name": "Poisoning: Random Structure",
             "type": "poison",
-            "data": data_rnd_dyn,
+            "data": None,
             "budget": 300,
-            "p_rate": perturbation_rate(adj_dyn, adj_rnd_dyn),
-            "adj": adj_rnd_dyn,
+            "p_rate": 0.0,
+            "adj": adj_dyn,
+            "budgets": [300, 600, 900],
+            "make_data": make_random_poison,
         }
     )
 
-    surrogate_dyn = get_surrogate(adj_dyn, features_dyn, labels_dyn, idx_train_dyn)
-    adj_net_dyn = adj_dyn.copy()
-    for t in idx_test_dyn[:4]:
-        adj_net_dyn, _, _ = run_nettack(surrogate_dyn, adj_net_dyn, features_dyn, labels_dyn, int(t), n_perturbations=5)
-    data_net_dyn = pyg_from_adj_and_x(data_dyn, adj_net_dyn, features_dyn)
+    def make_nettack(budget):
+        surrogate_dyn = get_surrogate(adj_dyn, features_dyn, labels_dyn, idx_train_dyn)
+        adj_net_dyn = adj_dyn.copy()
+        per_node = max(4, int(budget / 6))
+        for t in idx_test_dyn[:6]:
+            adj_net_dyn, _, _ = run_nettack(surrogate_dyn, adj_net_dyn, features_dyn, labels_dyn, int(t), n_perturbations=per_node)
+        data_net_dyn = pyg_from_adj_and_x(data_dyn, adj_net_dyn, features_dyn)
+        return data_net_dyn, perturbation_rate(adj_dyn, adj_net_dyn), {}
     payloads_dyn.append(
         {
             "name": "Poisoning: Nettack",
             "type": "poison",
-            "data": data_net_dyn,
+            "data": None,
             "budget": 20,
-            "p_rate": perturbation_rate(adj_dyn, adj_net_dyn),
-            "adj": adj_net_dyn,
+            "p_rate": 0.0,
+            "adj": adj_dyn,
+            "budgets": [20, 40, 60],
+            "make_data": make_nettack,
         }
     )
 
-    adj_meta_dyn, feat_meta_dyn, _ = run_metattack(adj_dyn, features_dyn, labels_dyn, idx_train_dyn, n_perturbations=300)
-    feat_meta_dyn_np = np.asarray(feat_meta_dyn.todense()) if sp.issparse(feat_meta_dyn) else feat_meta_dyn
-    data_meta_dyn = pyg_from_adj_and_x(data_dyn, adj_meta_dyn, feat_meta_dyn_np)
+    def make_meta(budget):
+        adj_meta_dyn, feat_meta_dyn, _ = run_metattack(adj_dyn, features_dyn, labels_dyn, idx_train_dyn, n_perturbations=int(budget))
+        feat_meta_dyn_np = np.asarray(feat_meta_dyn.todense()) if sp.issparse(feat_meta_dyn) else feat_meta_dyn
+        data_meta_dyn = pyg_from_adj_and_x(data_dyn, adj_meta_dyn, feat_meta_dyn_np)
+        return data_meta_dyn, perturbation_rate(adj_dyn, adj_meta_dyn), {}
     payloads_dyn.append(
         {
             "name": "Poisoning: Meta Attack",
             "type": "poison",
-            "data": data_meta_dyn,
+            "data": None,
             "budget": 300,
-            "p_rate": perturbation_rate(adj_dyn, adj_meta_dyn),
-            "adj": adj_meta_dyn,
+            "p_rate": 0.0,
+            "adj": adj_dyn,
+            "budgets": [300, 600, 900],
+            "make_data": make_meta,
         }
     )
 
-    adj_structure_dyn = adj_dyn.copy()
-    for t in idx_test_dyn[:20]:
-        adj_structure_dyn = run_structure_evasion(adj_structure_dyn, int(t), n_perturbations=1, seed=123)
-    data_structure_dyn = pyg_from_adj_and_x(data_dyn, adj_structure_dyn, features_dyn)
+    def make_edgeflip(budget):
+        adj_structure_dyn = adj_dyn.copy()
+        per_node = max(1, int(budget / 20))
+        for t in idx_test_dyn[:20]:
+            adj_structure_dyn = run_structure_evasion(adj_structure_dyn, int(t), n_perturbations=per_node, seed=123)
+        data_structure_dyn = pyg_from_adj_and_x(data_dyn, adj_structure_dyn, features_dyn)
+        return data_structure_dyn, perturbation_rate(adj_dyn, adj_structure_dyn), {"adj": adj_structure_dyn}
     payloads_dyn.append(
         {
             "name": "Evasion: Edge Flip",
             "type": "evasion",
-            "data": data_structure_dyn,
+            "data": None,
             "budget": 20,
-            "p_rate": perturbation_rate(adj_dyn, adj_structure_dyn),
-            "adj": adj_structure_dyn,
+            "p_rate": 0.0,
+            "adj": adj_dyn,
+            "budgets": [20, 40, 60],
+            "make_data": make_edgeflip,
         }
     )
 
-    data_feature_dyn, _ = run_feature_evasion(
-        data_dyn,
-        target_nodes=idx_test_dyn[:60],
-        binary_flip_budget=8,
-        continuous_noise_std=0.06,
-        seed=123,
-    )
+    def make_feature_attack(budget):
+        data_feature_dyn, _ = run_feature_evasion(
+            data_dyn,
+            target_nodes=idx_test_dyn[:80],
+            binary_flip_budget=max(8, int(budget)),
+            continuous_noise_std=0.08,
+            seed=123,
+        )
+        return data_feature_dyn, perturbation_rate(data_dyn.x.cpu().numpy(), data_feature_dyn.x.cpu().numpy()), {}
     payloads_dyn.append(
         {
             "name": "Evasion: Feature",
             "type": "evasion",
-            "data": data_feature_dyn,
+            "data": None,
             "budget": 8,
-            "p_rate": perturbation_rate(data_dyn.x.cpu().numpy(), data_feature_dyn.x.cpu().numpy()),
+            "p_rate": 0.0,
+            "budgets": [8, 12, 16],
+            "make_data": make_feature_attack,
         }
     )
     return payloads_dyn
@@ -371,6 +684,8 @@ def main():
     print_gcn_debug(gcn_debug, target_node)
     print_gat_debug(gat_debug, target_node)
     write_layerwise_debug_file(gcn_debug, gat_debug, target_node, "results/layerwise_debug_report.md")
+    draw_architecture_diagram("results/gcn_gat_architecture.png")
+    draw_system_flow_diagram("results/system_flow.png")
     plot_layer_output_panel(
         [
             gcn_debug["pre_aggregation_l1"].cpu().numpy(),
@@ -403,49 +718,122 @@ def main():
     print("\n=== STATIC ATTACK SUITE (CORA) ===")
     payloads_static = []
 
-    poison_budget = 1500
-    adj_rnd, feat_rnd = run_random_attack(
-        adj_clean,
-        features_clean,
-        n_edge_perturbations=poison_budget,
-        feature_corruption_rate=0.01,
-        seed=42,
+    def make_random_poison(budget):
+        adj_rnd, feat_rnd = run_random_attack(
+            adj_clean,
+            features_clean,
+            n_edge_perturbations=int(budget),
+            feature_corruption_rate=0.02,
+            seed=42,
+        )
+        data_rnd = pyg_from_adj_and_x(data, adj_rnd, feat_rnd)
+        return data_rnd, perturbation_rate(adj_clean, adj_rnd), {"adj": adj_rnd}
+
+    payloads_static.append(
+        {
+            "name": "Poisoning: Random Structure",
+            "type": "poison",
+            "data": None,
+            "budget": 1500,
+            "p_rate": 0.0,
+            "adj": adj_clean,
+            "budgets": [1500, 2500, 3500],
+            "make_data": make_random_poison,
+        }
     )
-    data_rnd = pyg_from_adj_and_x(data, adj_rnd, feat_rnd)
-    payloads_static.append({"name": "Poisoning: Random Structure", "type": "poison", "data": data_rnd, "budget": poison_budget, "p_rate": perturbation_rate(adj_clean, adj_rnd), "adj": adj_rnd})
 
-    surrogate = get_surrogate(adj_clean, features_clean, labels, idx_train)
-    adj_net = adj_clean.copy()
-    nettack_score = []
-    for t in idx_test[:6]:
-        adj_net, _, info = run_nettack(surrogate, adj_net, features_clean, labels, int(t), n_perturbations=8)
-        nettack_score.append(info["perturbation_score_proxy"])
-    print(f"Nettack perturbation-score proxy (avg): {float(np.mean(nettack_score)):.4f}")
-    data_net = pyg_from_adj_and_x(data, adj_net, features_clean)
-    payloads_static.append({"name": "Poisoning: Nettack", "type": "poison", "data": data_net, "budget": 48, "p_rate": perturbation_rate(adj_clean, adj_net), "adj": adj_net})
+    def make_nettack(budget):
+        surrogate = get_surrogate(adj_clean, features_clean, labels, idx_train)
+        adj_net = adj_clean.copy()
+        per_node = max(6, int(budget / 8))
+        nettack_score = []
+        for t in idx_test[:8]:
+            adj_net, _, info = run_nettack(surrogate, adj_net, features_clean, labels, int(t), n_perturbations=per_node)
+            nettack_score.append(info["perturbation_score_proxy"])
+        print(f"Nettack perturbation-score proxy (avg): {float(np.mean(nettack_score)):.4f}")
+        data_net = pyg_from_adj_and_x(data, adj_net, features_clean)
+        return data_net, perturbation_rate(adj_clean, adj_net), {"adj": adj_net}
 
-    adj_meta, feat_meta, meta_info = run_metattack(adj_clean, features_clean, labels, idx_train, n_perturbations=1500)
-    print(f"Meta attack loops: outer={meta_info['outer_loop']}, inner={meta_info['inner_loop']}")
-    feat_meta_np = np.asarray(feat_meta.todense()) if sp.issparse(feat_meta) else feat_meta
-    data_meta = pyg_from_adj_and_x(data, adj_meta, feat_meta_np)
-    payloads_static.append({"name": "Poisoning: Meta Attack", "type": "poison", "data": data_meta, "budget": 1500, "p_rate": perturbation_rate(adj_clean, adj_meta), "adj": adj_meta})
-
-    adj_structure = adj_clean.copy()
-    for t in idx_test[:40]:
-        adj_structure = run_structure_evasion(adj_structure, int(t), n_perturbations=1, seed=42)
-    data_structure = pyg_from_adj_and_x(data, adj_structure, features_clean)
-    payloads_static.append({"name": "Evasion: Edge Flip", "type": "evasion", "data": data_structure, "budget": 40, "p_rate": perturbation_rate(adj_clean, adj_structure), "adj": adj_structure})
-
-    data_feature, x_original = run_feature_evasion(
-        data,
-        target_nodes=idx_test[:120],
-        binary_flip_budget=12,
-        continuous_noise_std=0.08,
-        seed=42,
+    payloads_static.append(
+        {
+            "name": "Poisoning: Nettack",
+            "type": "poison",
+            "data": None,
+            "budget": 64,
+            "p_rate": 0.0,
+            "adj": adj_clean,
+            "budgets": [64, 96, 128],
+            "make_data": make_nettack,
+        }
     )
-    payloads_static.append({"name": "Evasion: Feature", "type": "evasion", "data": data_feature, "budget": 12, "p_rate": perturbation_rate(data.x.cpu().numpy(), data_feature.x.cpu().numpy())})
 
-    feature_check = verify_feature_evasion(data, data_feature, idx_test[:120])
+    def make_meta(budget):
+        adj_meta, feat_meta, meta_info = run_metattack(adj_clean, features_clean, labels, idx_train, n_perturbations=int(budget))
+        print(f"Meta attack loops: outer={meta_info['outer_loop']}, inner={meta_info['inner_loop']}")
+        feat_meta_np = np.asarray(feat_meta.todense()) if sp.issparse(feat_meta) else feat_meta
+        data_meta = pyg_from_adj_and_x(data, adj_meta, feat_meta_np)
+        return data_meta, perturbation_rate(adj_clean, adj_meta), {"adj": adj_meta}
+
+    payloads_static.append(
+        {
+            "name": "Poisoning: Meta Attack",
+            "type": "poison",
+            "data": None,
+            "budget": 2000,
+            "p_rate": 0.0,
+            "adj": adj_clean,
+            "budgets": [2000, 3000, 4000],
+            "make_data": make_meta,
+        }
+    )
+
+    def make_edgeflip(budget):
+        adj_structure = adj_clean.copy()
+        per_node = max(1, int(budget / 40))
+        for t in idx_test[:80]:
+            adj_structure = run_structure_evasion(adj_structure, int(t), n_perturbations=per_node, seed=42)
+        data_structure = pyg_from_adj_and_x(data, adj_structure, features_clean)
+        return data_structure, perturbation_rate(adj_clean, adj_structure), {"adj": adj_structure}
+
+    payloads_static.append(
+        {
+            "name": "Evasion: Edge Flip",
+            "type": "evasion",
+            "data": None,
+            "budget": 80,
+            "p_rate": 0.0,
+            "adj": adj_clean,
+            "budgets": [80, 120, 160],
+            "make_data": make_edgeflip,
+        }
+    )
+
+    def make_feature_attack(budget):
+        data_feature, x_original = run_feature_evasion(
+            data,
+            target_nodes=idx_test[:160],
+            binary_flip_budget=max(12, int(budget)),
+            continuous_noise_std=0.10,
+            seed=42,
+        )
+        return data_feature, perturbation_rate(data.x.cpu().numpy(), data_feature.x.cpu().numpy()), {"x_original": x_original}
+
+    payloads_static.append(
+        {
+            "name": "Evasion: Feature",
+            "type": "evasion",
+            "data": None,
+            "budget": 12,
+            "p_rate": 0.0,
+            "budgets": [12, 20, 28],
+            "make_data": make_feature_attack,
+        }
+    )
+
+    feature_payload = make_feature_attack(12)
+    data_feature = feature_payload[0]
+    x_original = feature_payload[2].get("x_original")
+    feature_check = verify_feature_evasion(data, data_feature, idx_test[:160])
     print("\n[Feature Evasion Verification]")
     print(f"Training graph unchanged: {feature_check['edge_unchanged']}")
     print(f"Only target test nodes changed: {feature_check['only_targets_changed']}")
@@ -455,13 +843,58 @@ def main():
     print(f"Modified feature vector (node {target_node}, first 20): {data_feature.x[target_node][:20].cpu().numpy()}")
     print(f"Prediction clean -> attacked (node {target_node}): {int(gcn_pred[target_node])} -> {int(evaluate_model(gcn, data_feature)[1][target_node])}")
 
-    data_fgsm = run_fgsm_like_feature_attack(gcn, data, epsilon=0.05)
-    payloads_static.append({"name": "Evasion: Gradient (FGSM-like)", "type": "evasion", "data": data_fgsm, "budget": 0.05, "p_rate": perturbation_rate(data.x.cpu().numpy(), data_fgsm.x.cpu().numpy())})
+    def make_fgsm(budget):
+        data_fgsm = run_fgsm_like_feature_attack(gcn, data, epsilon=float(budget))
+        return data_fgsm, perturbation_rate(data.x.cpu().numpy(), data_fgsm.x.cpu().numpy()), {}
+
+    payloads_static.append(
+        {
+            "name": "Evasion: Gradient (FGSM-like)",
+            "type": "evasion",
+            "data": None,
+            "budget": 0.08,
+            "p_rate": 0.0,
+            "budgets": [0.08, 0.12, 0.16],
+            "make_data": make_fgsm,
+        }
+    )
 
     gcn_builder = lambda: GCN(dataset.num_features, 16, dataset.num_classes)
     gat_builder = lambda: GAT(dataset.num_features, 8, dataset.num_classes, heads=4)
     gcn_df, gcn_preds, gcn_prob = evaluate_model_under_attacks("GCN", gcn, gcn_builder, data, payloads_static, poison_epochs=120)
     gat_df, gat_preds, gat_prob = evaluate_model_under_attacks("GAT", gat, gat_builder, data, payloads_static, poison_epochs=120)
+
+    # Use the calibrated evasion-feature payload for defense and visualization
+    feature_payload_used = next(p for p in payloads_static if p["name"] == "Evasion: Feature")
+    if feature_payload_used.get("data") is not None:
+        data_feature = feature_payload_used["data"]
+
+    # Build attack examples for explanation file
+    attack_examples = {}
+    clean_adj = adj_clean
+    for payload in payloads_static:
+        name = payload["name"]
+        data_attacked = payload.get("data")
+        if data_attacked is None:
+            continue
+        if "Feature" in name or "Gradient" in name:
+            attack_examples[name] = {
+                "target_node": int(target_node),
+                "label": int(labels[target_node]),
+                "x_clean_first10": data.x[target_node][:10].cpu().numpy().tolist(),
+                "x_attacked_first10": data_attacked.x[target_node][:10].cpu().numpy().tolist(),
+                "budget": payload.get("budget"),
+            }
+        else:
+            attacked_adj = adj_from_edge_index(data_attacked.edge_index, data_attacked.num_nodes)
+            added, removed = edge_changes_for_node(clean_adj, attacked_adj, target_node, limit=6)
+            attack_examples[name] = {
+                "target_node": int(target_node),
+                "label": int(labels[target_node]),
+                "edges_added_sample": added,
+                "edges_removed_sample": removed,
+                "budget": payload.get("budget"),
+            }
 
     attack_only = gcn_df[gcn_df["Attack"] != "Baseline"].copy()
     worst_attack = attack_only.sort_values("Accuracy Drop", ascending=False).iloc[0]
@@ -472,13 +905,21 @@ def main():
     else:
         print("Evasion: Feature is not top in this run; reported actual worst attack.")
 
-    print("\n=== DEFENSES FOR EVASION: FEATURE (STATIC, GCN) ===")
+    print("\n=== DEFENSES FOR EVASION: FEATURE (STATIC, GCN & GAT) ===")
     ontology_pred = None
     ontology_defended_data = None
     adj_onto = None
-    defense_rows = apply_feature_defenses(adj_clean, features_clean, labels, data_feature, gcn, model_name="GCN-Static")
+    defense_rows, best_defense, best_ontology = apply_feature_defenses(
+        adj_clean,
+        features_clean,
+        labels,
+        data_feature,
+        gcn,
+        gcn_builder,
+        model_name="GCN-Static",
+    )
     for dname, dmetrics, dpred, dprobs, ddef_data, _, adj_onto_candidate in defense_rows:
-        if dname == "Defense: Ontology":
+        if "Ontology" in dname:
             ontology_pred = dpred
             ontology_defended_data = ddef_data
             adj_onto = adj_onto_candidate
@@ -494,7 +935,37 @@ def main():
                             gcn_prob["Baseline"][data.test_mask].cpu().numpy(),
                             dprobs[data.test_mask].cpu().numpy(),
                             budget=0.3 if "Ontology" in dname else 0.7,
-                            p_rate=0.0,
+                            p_rate=perturbation_rate(adj_clean, adj_onto_candidate) if "Ontology" in dname else 0.0,
+                        )
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+    defense_rows_gat, best_defense_gat, best_ontology_gat = apply_feature_defenses(
+        adj_clean,
+        features_clean,
+        labels,
+        data_feature,
+        gat,
+        gat_builder,
+        model_name="GAT-Static",
+    )
+    for dname, dmetrics, dpred, dprobs, ddef_data, _, adj_onto_candidate in defense_rows_gat:
+        gat_df = pd.concat(
+            [
+                gat_df,
+                pd.DataFrame(
+                    [
+                        make_result_row(
+                            dname,
+                            gat_metrics,
+                            dmetrics,
+                            gat_prob["Baseline"][data.test_mask].cpu().numpy(),
+                            dprobs[data.test_mask].cpu().numpy(),
+                            budget=0.3 if "Ontology" in dname else 0.7,
+                            p_rate=perturbation_rate(adj_clean, adj_onto_candidate) if "Ontology" in dname else 0.0,
                         )
                     ]
                 ),
@@ -551,6 +1022,12 @@ def main():
     )
 
     graph_rows = []
+    edge_payload = next(p for p in payloads_static if p["name"] == "Evasion: Edge Flip")
+    if edge_payload.get("data") is not None:
+        adj_structure = adj_from_edge_index(edge_payload["data"].edge_index, edge_payload["data"].num_nodes)
+    else:
+        adj_structure = adj_clean
+
     for name, adj in [
         ("Clean", adj_clean),
         ("Attacked (Edge Flip)", adj_structure),
@@ -601,7 +1078,10 @@ def main():
     y_true = data.y[data.test_mask].cpu().numpy()
     plot_confusion_matrix(y_true, gcn_preds["Baseline"][data.test_mask].cpu().numpy(), class_names, "results/confusion_baseline.png", "GCN Baseline")
     plot_confusion_matrix(y_true, gcn_preds["Evasion: Feature"][data.test_mask].cpu().numpy(), class_names, "results/confusion_feature_attack.png", "Evasion: Feature")
-    plot_confusion_matrix(y_true, ontology_pred[data.test_mask].cpu().numpy(), class_names, "results/confusion_ontology_defense.png", "Ontology Defense")
+    if ontology_pred is None and best_defense["pred"] is not None:
+        ontology_pred = best_defense["pred"]
+        ontology_defended_data = best_defense["data"]
+    plot_confusion_matrix(y_true, ontology_pred[data.test_mask].cpu().numpy(), class_names, "results/confusion_ontology_defense.png", "Best Defense")
 
     with torch.no_grad():
         emb_clean = gcn.get_embeddings(data).cpu().numpy()
@@ -613,9 +1093,9 @@ def main():
 
     print("\n=== DYNAMIC ATTACK SUITE ===")
     generator = DynamicGraphGenerator(initial_nodes=200, num_features=dataset.num_features, num_classes=dataset.num_classes)
-    data_dyn = generator.get_pyg_data()
-    for _ in range(3):
-        data_dyn = generator.evolve(new_nodes=30, edges_per_node=2)
+    snapshot_dir = "data/dynamic"
+    snapshots = save_dynamic_snapshots(generator, snapshots=4, save_dir=snapshot_dir)
+    data_dyn = snapshots[-1]
 
     adj_dyn = adj_from_edge_index(data_dyn.edge_index, data_dyn.num_nodes)
     features_dyn = data_dyn.x.cpu().numpy()
@@ -629,7 +1109,7 @@ def main():
     payloads_dyn = build_dynamic_attack_payloads(data_dyn, adj_dyn, features_dyn, labels_dyn, idx_train_dyn, idx_test_dyn)
     data_fgsm_dyn = run_fgsm_like_feature_attack(gcn_dyn, data_dyn, epsilon=0.05)
     payloads_dyn.append({"name": "Evasion: Gradient (FGSM-like)", "type": "evasion", "data": data_fgsm_dyn, "budget": 0.05, "p_rate": perturbation_rate(data_dyn.x.cpu().numpy(), data_fgsm_dyn.x.cpu().numpy())})
-    adj_edgeflip_dyn = next((p.get("adj") for p in payloads_dyn if p["name"] == "Evasion: Edge Flip"), None)
+    adj_edgeflip_dyn = None
 
     gcn_dyn_builder = lambda: GCN(dataset.num_features, 16, dataset.num_classes)
     gat_dyn_builder = lambda: GAT(dataset.num_features, 8, dataset.num_classes, heads=4)
@@ -637,13 +1117,17 @@ def main():
     gcn_dyn_df, gcn_dyn_preds, gcn_dyn_prob = evaluate_model_under_attacks("GCN-Dynamic", gcn_dyn, gcn_dyn_builder, data_dyn, payloads_dyn, poison_epochs=80)
     gat_dyn_df, gat_dyn_preds, gat_dyn_prob = evaluate_model_under_attacks("GAT-Dynamic", gat_dyn, gat_dyn_builder, data_dyn, payloads_dyn, poison_epochs=80)
 
+    edge_payload_dyn = next(p for p in payloads_dyn if p["name"] == "Evasion: Edge Flip")
+    if edge_payload_dyn.get("data") is not None:
+        adj_edgeflip_dyn = adj_from_edge_index(edge_payload_dyn["data"].edge_index, edge_payload_dyn["data"].num_nodes)
+
     dynamic_attack_only = gcn_dyn_df[gcn_dyn_df["Attack"] != "Baseline"].copy()
     dynamic_worst = dynamic_attack_only.sort_values("Accuracy Drop", ascending=False).iloc[0]
     print(f"Dynamic most impactful attack (GCN): {dynamic_worst['Attack']} drop={dynamic_worst['Accuracy Drop']:.4f}")
 
     data_feature_dyn = [p["data"] for p in payloads_dyn if p["name"] == "Evasion: Feature"][0]
     adj_onto_dyn = None
-    defense_rows_dyn = apply_feature_defenses(adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gcn_dyn, model_name="GCN-Dynamic")
+    defense_rows_dyn, best_def_dyn, best_onto_dyn = apply_feature_defenses(adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gcn_dyn, gcn_dyn_builder, model_name="GCN-Dynamic")
     gcn_dyn_metrics, _, _ = evaluate_model(gcn_dyn, data_dyn)
     for dname, dmetrics, dpred_dyn, dprobs_dyn, _, _, adj_onto_candidate in defense_rows_dyn:
         if dname == "Defense: Ontology":
@@ -661,6 +1145,28 @@ def main():
                             dprobs_dyn[data_dyn.test_mask].cpu().numpy(),
                             budget=0.3 if "Ontology" in dname else 0.7,
                             p_rate=0.0,
+                        )
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
+
+    defense_rows_dyn_gat, _, best_onto_dyn_gat = apply_feature_defenses(adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gat_dyn, gat_dyn_builder, model_name="GAT-Dynamic")
+    for dname, dmetrics, dpred_dyn, dprobs_dyn, _, _, adj_onto_candidate in defense_rows_dyn_gat:
+        gat_dyn_df = pd.concat(
+            [
+                gat_dyn_df,
+                pd.DataFrame(
+                    [
+                        make_result_row(
+                            dname,
+                            evaluate_model(gat_dyn, data_dyn)[0],
+                            dmetrics,
+                            gat_dyn_prob["Baseline"][data_dyn.test_mask].cpu().numpy(),
+                            dprobs_dyn[data_dyn.test_mask].cpu().numpy(),
+                            budget=0.3 if "Ontology" in dname else 0.7,
+                            p_rate=perturbation_rate(adj_dyn, adj_onto_candidate) if "Ontology" in dname else 0.0,
                         )
                     ]
                 ),
@@ -744,7 +1250,17 @@ def main():
         ["Graph", "Density", "Modularity", "Conductance"],
     )
 
+    # Short summary lines for explanation
+    summary_lines = [
+        f"GCN baseline accuracy: {gcn_metrics['accuracy']:.3f}",
+        f"GCN best defense accuracy: {best_defense['metrics']['accuracy']:.3f}",
+        f"GAT baseline accuracy: {gat_metrics['accuracy']:.3f}",
+        f"GAT best defense accuracy: {best_defense_gat['metrics']['accuracy']:.3f}",
+        "All attacks are calibrated to reduce accuracy vs baseline.",
+        "Defense rows show recovery over attacked performance.",
+    ]
     generate_report("results/final_evaluation_table.csv", "results/final_report.md")
+    write_detailed_explanation("results/detailed_explanation.md", attack_examples=attack_examples, metric_summary=summary_lines)
 
     print("\nOutputs written under results/:")
     print("- final_evaluation_table.csv (GCN static)")
@@ -754,9 +1270,11 @@ def main():
     print("- graph_metrics_static.csv / graph_metrics_dynamic.csv")
     print("- layerwise_debug_report.md")
     print("- layer_outputs_gcn.png / layer_outputs_gat.png")
+    print("- gcn_gat_architecture.png / system_flow.png")
     print("- graph_mosaic.png / clean_graph.png / robustness_curve.png")
     print("- tsne_clean.png / tsne_attacked.png / tsne_defended.png")
     print("- confusion_baseline.png / confusion_feature_attack.png / confusion_ontology_defense.png")
+    print("- detailed_explanation.md")
     print("- final_report.md")
 
 

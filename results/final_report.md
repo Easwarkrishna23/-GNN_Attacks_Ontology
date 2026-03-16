@@ -16,7 +16,7 @@
 
 ## Impact Analysis
 - Baseline accuracy: 0.8020
-- Most impactful attack: Evasion: FGSM-like (accuracy drop 0.7980)
+- Most impactful attack: Evasion: Gradient (FGSM-like) (accuracy drop 0.7980)
 
 ## Conclusion
 - Attack and defense performance are stored in `results/final_evaluation_table.csv`.
