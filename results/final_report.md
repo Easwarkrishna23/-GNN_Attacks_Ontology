@@ -17,7 +17,9 @@
 ## Impact Analysis
 - Baseline accuracy: 0.8020
 - Most impactful attack: Evasion: Gradient (FGSM-like) (accuracy drop 0.7980)
+- Best post-defense accuracy: 0.9370 (Defense: Ontology + Retrain)
 
 ## Conclusion
-- Attack and defense performance are stored in `results/final_evaluation_table.csv`.
+- Pre-defense performance is stored in `results/final_pre_defense_gcn.csv`.
+- Post-defense performance is stored in `results/final_post_defense_gcn.csv`.
 - Visual diagnostics include graph comparisons, robustness curves, confusion matrices, and t-SNE.

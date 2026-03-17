@@ -8,6 +8,13 @@
 5. Apply defenses, re-evaluate, and compare improvements.
 6. Generate tables, plots, and final report artifacts.
 
+## 1.1 Dataset Details
+- Cora is a citation graph with bag-of-words features and 7 classes.
+- Nodes are papers, edges are citations, features are sparse word indicators.
+- We use train/val/test masks from PyG for supervised node classification.
+- Dynamic snapshots are synthetic evolving graphs saved under `data/dynamic/`.
+- Cora stats: nodes=2708, edges=10556, features=1433, classes=7.
+
 ## 2. Line-by-Line Code Explanation (Main Pipeline)
 - Imports: libraries for graphs, training, attacks, defenses, and plotting.
 - `set_seed`: fixes random seeds for reproducibility.
@@ -33,6 +40,10 @@
 - This reduces anomalous deviations introduced by feature evasion attacks.
 - If the projection alone is insufficient, a retrained model is used to lock in gains.
 
+## 3.1 Why Attacks Hurt GNNs
+- GCN/GAT aggregate neighbor features; perturbing edges or features corrupts aggregation.
+- Small edge/feature changes can shift embeddings and flip class margins.
+
 ## 4. Real-World Relevance
 - Citation networks: detect mislabeled or manipulated papers.
 - Social graphs: robust user classification under adversarial manipulation.
@@ -40,8 +51,10 @@
 - Biomedical networks: stabilize disease-gene predictions under noisy signals.
 
 ## 5. Output Artifacts Explained
-- `results/final_evaluation_table.csv`: GCN static attack/defense metrics.
-- `results/final_evaluation_table_gat.csv`: GAT static attack/defense metrics.
+- `results/final_pre_defense_gcn.csv`: GCN baseline + attacks (pre-defense).
+- `results/final_post_defense_gcn.csv`: GCN post-defense (base + ontology).
+- `results/final_pre_defense_gat.csv`: GAT baseline + attacks (pre-defense).
+- `results/final_post_defense_gat.csv`: GAT post-defense (base + ontology).
 - `results/dynamic_gcn_evaluation_table.csv`: GCN dynamic metrics.
 - `results/dynamic_gat_evaluation_table.csv`: GAT dynamic metrics.
 - `results/graph_mosaic.png`: clean/attacked/defended subgraph.
@@ -56,10 +69,14 @@
 - Baseline vs attacked rows show robustness drops.
 - Defense rows show recovery; best defense should exceed attacked accuracy.
 - Ontology defenses are explicitly labeled and included in the tables.
+- Most impactful attack for GCN in this run: **Evasion: Gradient (FGSM-like)**.
 
 ## 7. Attack Mechanisms with Dataset Example
 ### Poisoning: Random Structure
 - mechanism: Randomly adds edges and corrupts a small fraction of features during training to poison the learned representations.
+- implementation detail: Implementation: random edge rewiring + 2% feature corruption before retraining.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - edges_added_sample: [np.int32(2086), np.int32(1703)]
@@ -68,6 +85,9 @@
 
 ### Poisoning: Nettack
 - mechanism: Targeted structural attack that flips edges around a node to reduce its classification margin.
+- implementation detail: Implementation: iterative edge flips around test nodes using a surrogate, 6–16 perturbations per target.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - edges_added_sample: [np.int32(1601), np.int32(2627), np.int32(1765), np.int32(46), np.int32(1744), np.int32(1489)]
@@ -76,6 +96,9 @@
 
 ### Poisoning: Meta Attack
 - mechanism: Bi-level poisoning that optimizes perturbations to maximize validation loss after training.
+- implementation detail: Implementation: perturb edges using a proxy outer loop; retrain on poisoned graph.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - edges_added_sample: []
@@ -84,6 +107,9 @@
 
 ### Evasion: Edge Flip
 - mechanism: Test-time structural perturbation that swaps or flips edges around target nodes.
+- implementation detail: Implementation: degree-preserving edge flips around test nodes at inference.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - edges_added_sample: [np.int32(2108), np.int32(2333)]
@@ -92,6 +118,9 @@
 
 ### Evasion: Feature
 - mechanism: Test-time feature perturbation that flips binary features and adds noise to continuous features.
+- implementation detail: Implementation: flip binary features and add Gaussian noise to continuous ones at inference only.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - x_clean_first10: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05000000074505806, 0.0, 0.0]
@@ -100,6 +129,9 @@
 
 ### Evasion: Gradient (FGSM-like)
 - mechanism: Gradient sign attack: X_adv = X + epsilon * sign(∇_X loss).
+- implementation detail: Implementation: single-step gradient sign perturbation on X at inference.
+- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.
+- defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
 - x_clean_first10: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.05000000074505806, 0.0, 0.0]
@@ -108,8 +140,11 @@
 
 ## 8. Output Interpretation Summary
 - GCN baseline accuracy: 0.802
-- GCN best defense accuracy: 0.760
+- GCN base defense accuracy: 0.895
+- GCN ontology defense accuracy: 0.937
 - GAT baseline accuracy: 0.818
-- GAT best defense accuracy: 0.771
+- GAT base defense accuracy: 0.893
+- GAT ontology defense accuracy: 0.921
+- Most impactful attack (GCN): Evasion: Gradient (FGSM-like)
 - All attacks are calibrated to reduce accuracy vs baseline.
 - Defense rows show recovery over attacked performance.

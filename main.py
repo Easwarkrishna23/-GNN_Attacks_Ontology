@@ -83,13 +83,13 @@ def save_clean_graph_plot(adj, labels, save_path):
 
 
 def draw_architecture_diagram(save_path):
-    fig, ax = plt.subplots(figsize=(16, 9))
+    fig, ax = plt.subplots(figsize=(18, 10))
     ax.axis("off")
 
-    def box(x, y, w, h, text, color="#f2f2f2"):
+    def box(x, y, w, h, text, color="#f2f2f2", fontsize=8):
         patch = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02", linewidth=1.5, edgecolor="black", facecolor=color)
         ax.add_patch(patch)
-        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=9)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fontsize)
 
     # Helper: stacked frames (similar vibe to reference)
     def stacked_graph(x, y, w, h, label):
@@ -106,44 +106,70 @@ def draw_architecture_diagram(save_path):
         ax.text(x + w / 2 + 0.03, y - 0.03, label, ha="center", va="top", fontsize=9)
 
     # Top row: Static (Cora) → GCN
-    stacked_graph(0.03, 0.68, 0.16, 0.20, "Static Dataset (Cora)")
-    box(0.23, 0.72, 0.16, 0.12, "2‑Layer GCN\nLayer 1 + Layer 2", "#fff3e6")
-    box(0.42, 0.76, 0.12, 0.08, "Feature‑1\nH¹", "#f0f0f0")
-    box(0.42, 0.66, 0.12, 0.08, "Feature‑2\nZ", "#f0f0f0")
-    box(0.56, 0.70, 0.10, 0.10, "Concat", "#f7f7f7")
-    box(0.69, 0.70, 0.14, 0.12, "GCN Classifier\nSoftmax", "#f7f7f7")
-    box(0.85, 0.70, 0.12, 0.12, "Output\nNode Class", "#f7f7f7")
-    ax.text(0.23, 0.62, "Layer 1: H¹ = ReLU(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² X W⁽⁰⁾)\nLayer 2: Z = Softmax(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² H¹ W⁽¹⁾)", fontsize=8)
+    stacked_graph(0.02, 0.70, 0.16, 0.22, "Static Dataset (Cora)")
+    box(0.22, 0.78, 0.12, 0.10, "Input\nX, A", "#e8f0ff", fontsize=9)
+    box(
+        0.36,
+        0.75,
+        0.22,
+        0.14,
+        "GCN Layer 1\nNormalize + Aggregate\nH¹ = ReLU(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² X W⁽⁰⁾)",
+        "#fff3e6",
+        fontsize=7,
+    )
+    box(0.60, 0.79, 0.10, 0.08, "Feature‑1\nH¹", "#f0f0f0", fontsize=9)
+    box(
+        0.72,
+        0.75,
+        0.22,
+        0.14,
+        "GCN Layer 2\nZ = Softmax(D̂⁻¹ᐟ² Â D̂⁻¹ᐟ² H¹ W⁽¹⁾)",
+        "#fff3e6",
+        fontsize=7,
+    )
+    box(0.95, 0.79, 0.05, 0.08, "Output\nClass", "#f7f7f7", fontsize=8)
 
     # Bottom row: Dynamic snapshots → GAT
-    stacked_graph(0.03, 0.30, 0.16, 0.20, "Dynamic Snapshots")
-    box(0.23, 0.34, 0.16, 0.12, "2‑Layer GAT\nMulti‑Head", "#e8f5e9")
-    box(0.42, 0.38, 0.12, 0.08, "Feature‑1\nH¹", "#f0f0f0")
-    box(0.42, 0.28, 0.12, 0.08, "Feature‑2\nZ", "#f0f0f0")
-    box(0.56, 0.32, 0.10, 0.10, "Concat", "#f7f7f7")
-    box(0.69, 0.32, 0.14, 0.12, "GAT Classifier\nSoftmax", "#f7f7f7")
-    box(0.85, 0.32, 0.12, 0.12, "Output\nNode Class", "#f7f7f7")
-    ax.text(0.23, 0.24, "Attention: αᵢⱼ = softmax(LeakyReLU(aᵀ[Whᵢ || Whⱼ]))\nH¹ = ||ₖ Σⱼ αᵢⱼᵏ Wᵏ hⱼ", fontsize=8)
+    stacked_graph(0.02, 0.30, 0.16, 0.22, "Dynamic Snapshots")
+    box(0.22, 0.38, 0.12, 0.10, "Input\nX, A", "#e8f0ff", fontsize=9)
+    box(
+        0.36,
+        0.35,
+        0.22,
+        0.14,
+        "GAT Layer 1 (Multi‑Head)\nαᵢⱼ = softmax(LeakyReLU(aᵀ[Whᵢ||Whⱼ]))\nH¹ = ||ₖ Σⱼ αᵢⱼᵏ Wᵏ hⱼ",
+        "#e8f5e9",
+        fontsize=7,
+    )
+    box(0.60, 0.39, 0.10, 0.08, "Feature‑1\nH¹ (concat)", "#f0f0f0", fontsize=8)
+    box(
+        0.72,
+        0.35,
+        0.22,
+        0.14,
+        "GAT Layer 2\nZ = Softmax(Σⱼ αᵢⱼ W hⱼ)",
+        "#e8f5e9",
+        fontsize=7,
+    )
+    box(0.95, 0.39, 0.05, 0.08, "Output\nClass", "#f7f7f7", fontsize=8)
 
     # Arrows (top)
     for start, end in [
-        ((0.19, 0.78), (0.23, 0.78)),
-        ((0.39, 0.78), (0.42, 0.80)),
-        ((0.39, 0.78), (0.42, 0.70)),
-        ((0.54, 0.75), (0.56, 0.75)),
-        ((0.66, 0.75), (0.69, 0.75)),
-        ((0.83, 0.75), (0.85, 0.75)),
+        ((0.18, 0.80), (0.22, 0.83)),
+        ((0.34, 0.83), (0.36, 0.83)),
+        ((0.58, 0.83), (0.60, 0.83)),
+        ((0.70, 0.83), (0.72, 0.83)),
+        ((0.94, 0.83), (0.95, 0.83)),
     ]:
         ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
 
     # Arrows (bottom)
     for start, end in [
-        ((0.19, 0.40), (0.23, 0.40)),
-        ((0.39, 0.40), (0.42, 0.42)),
-        ((0.39, 0.40), (0.42, 0.32)),
-        ((0.54, 0.37), (0.56, 0.37)),
-        ((0.66, 0.37), (0.69, 0.37)),
-        ((0.83, 0.37), (0.85, 0.37)),
+        ((0.18, 0.40), (0.22, 0.43)),
+        ((0.34, 0.43), (0.36, 0.43)),
+        ((0.58, 0.43), (0.60, 0.43)),
+        ((0.70, 0.43), (0.72, 0.43)),
+        ((0.94, 0.43), (0.95, 0.43)),
     ]:
         ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
 
@@ -154,38 +180,42 @@ def draw_architecture_diagram(save_path):
 
 
 def draw_system_flow_diagram(save_path):
-    fig, ax = plt.subplots(figsize=(16, 9))
+    fig, ax = plt.subplots(figsize=(18, 9))
     ax.axis("off")
 
-    def box(x, y, w, h, text, color="#e6f0ff"):
+    def box(x, y, w, h, text, color="#e6f0ff", fontsize=8):
         patch = FancyBboxPatch((x, y), w, h, boxstyle="round,pad=0.02", linewidth=1.5, edgecolor="black", facecolor=color)
         ax.add_patch(patch)
-        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=9)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fontsize)
 
-    box(0.03, 0.74, 0.22, 0.18, "Clean Dataset\n(Cora / Dynamic)", "#e6f0ff")
-    box(0.30, 0.74, 0.22, 0.18, "Preprocessing\nNormalize Features\nTrain/Test Split", "#f0f0f0")
-    box(0.57, 0.74, 0.22, 0.18, "Baseline Training\nGCN / GAT", "#fef9e7")
-    box(0.84, 0.74, 0.13, 0.18, "Clean Metrics\nAccuracy/F1", "#f7f7f7")
+    # Clean pipeline (top row)
+    box(0.03, 0.73, 0.20, 0.20, "Clean Dataset\nX, A\n(Cora / Dynamic)", "#e6f0ff", fontsize=9)
+    box(0.26, 0.73, 0.20, 0.20, "Baseline GCN/GAT\nMessage Passing\nH, Z", "#fef9e7", fontsize=9)
+    box(0.49, 0.73, 0.20, 0.20, "Clean Metrics\nAccuracy, F1,\nROC-AUC", "#f7f7f7", fontsize=9)
+    box(0.72, 0.73, 0.22, 0.20, "Saved Outputs\nClean Plots\nBaseline Tables", "#f7f7f7", fontsize=9)
 
-    box(0.03, 0.44, 0.22, 0.18, "Attack Injection\nPoisoning/Evasion", "#fdecea")
-    box(0.30, 0.44, 0.22, 0.18, "Dataset Changes\nEdges / Features", "#fdecea")
-    box(0.57, 0.44, 0.22, 0.18, "Attacked Metrics\nDrop Observed", "#f7f7f7")
+    # Attack pipeline (middle row)
+    box(0.03, 0.43, 0.20, 0.20, "Attack Injection\nPoisoning / Evasion", "#fdecea", fontsize=9)
+    box(0.26, 0.43, 0.20, 0.20, "Corrupted Data\nX + ΔX\nA + ΔA", "#fdecea", fontsize=9)
+    box(0.49, 0.43, 0.20, 0.20, "Attacked Metrics\nAccuracy Drop\nMargin Shift", "#f7f7f7", fontsize=9)
+    box(0.72, 0.43, 0.22, 0.20, "Saved Outputs\nAttack Plots\nAttack Tables", "#f7f7f7", fontsize=9)
 
-    box(0.03, 0.14, 0.22, 0.18, "Defense Stage\nSmoothing / Ontology", "#e8f5e9")
-    box(0.30, 0.14, 0.22, 0.18, "Defended Data\nNoise Reduced", "#e8f5e9")
-    box(0.57, 0.14, 0.22, 0.18, "Post-Defense Metrics\nRecovery", "#f7f7f7")
-    box(0.84, 0.14, 0.13, 0.18, "Outputs\nTables & Plots", "#f7f7f7")
+    # Defense pipeline (bottom row)
+    box(0.03, 0.13, 0.20, 0.20, "Defense Stage\nFeature Smoothing\nX_s = αX + (1-α)ÂX", "#e8f5e9", fontsize=8)
+    box(0.26, 0.13, 0.20, 0.20, "Ontology Defense\nX' = X + λ OX", "#e8f5e9", fontsize=8)
+    box(0.49, 0.13, 0.20, 0.20, "Post-Defense Metrics\nRecovered Accuracy", "#f7f7f7", fontsize=9)
+    box(0.72, 0.13, 0.22, 0.20, "Final Outputs\nPost-Defense Tables\nVisual Comparisons", "#f7f7f7", fontsize=9)
 
     arrows = [
-        ((0.25, 0.83), (0.30, 0.83)),
-        ((0.52, 0.83), (0.57, 0.83)),
-        ((0.79, 0.83), (0.84, 0.83)),
-        ((0.25, 0.53), (0.30, 0.53)),
-        ((0.52, 0.53), (0.57, 0.53)),
-        ((0.79, 0.53), (0.84, 0.53)),
-        ((0.25, 0.23), (0.30, 0.23)),
-        ((0.52, 0.23), (0.57, 0.23)),
-        ((0.79, 0.23), (0.84, 0.23)),
+        ((0.23, 0.83), (0.26, 0.83)),
+        ((0.46, 0.83), (0.49, 0.83)),
+        ((0.69, 0.83), (0.72, 0.83)),
+        ((0.23, 0.53), (0.26, 0.53)),
+        ((0.46, 0.53), (0.49, 0.53)),
+        ((0.69, 0.53), (0.72, 0.53)),
+        ((0.23, 0.23), (0.26, 0.23)),
+        ((0.46, 0.23), (0.49, 0.23)),
+        ((0.69, 0.23), (0.72, 0.23)),
     ]
     for start, end in arrows:
         ax.add_patch(FancyArrowPatch(start, end, arrowstyle="->", mutation_scale=12, linewidth=1.5))
@@ -209,7 +239,7 @@ def save_dynamic_snapshots(generator, snapshots, save_dir):
     return data_list
 
 
-def write_detailed_explanation(save_path, attack_examples=None, metric_summary=None):
+def write_detailed_explanation(save_path, attack_examples=None, metric_summary=None, dataset_stats=None, worst_attack_name=None):
     lines = []
     lines.append("# Project Explanation and Output Guide")
     lines.append("")
@@ -220,6 +250,14 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("4. Evaluate metrics (accuracy, F1, ROC-AUC, log-loss, margins).")
     lines.append("5. Apply defenses, re-evaluate, and compare improvements.")
     lines.append("6. Generate tables, plots, and final report artifacts.")
+    lines.append("")
+    lines.append("## 1.1 Dataset Details")
+    lines.append("- Cora is a citation graph with bag-of-words features and 7 classes.")
+    lines.append("- Nodes are papers, edges are citations, features are sparse word indicators.")
+    lines.append("- We use train/val/test masks from PyG for supervised node classification.")
+    lines.append("- Dynamic snapshots are synthetic evolving graphs saved under `data/dynamic/`.")
+    if dataset_stats:
+        lines.append(f"- Cora stats: nodes={dataset_stats.get('num_nodes')}, edges={dataset_stats.get('num_edges')}, features={dataset_stats.get('num_features')}, classes={dataset_stats.get('num_classes')}.")
     lines.append("")
     lines.append("## 2. Line-by-Line Code Explanation (Main Pipeline)")
     lines.append("- Imports: libraries for graphs, training, attacks, defenses, and plotting.")
@@ -246,6 +284,10 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("- This reduces anomalous deviations introduced by feature evasion attacks.")
     lines.append("- If the projection alone is insufficient, a retrained model is used to lock in gains.")
     lines.append("")
+    lines.append("## 3.1 Why Attacks Hurt GNNs")
+    lines.append("- GCN/GAT aggregate neighbor features; perturbing edges or features corrupts aggregation.")
+    lines.append("- Small edge/feature changes can shift embeddings and flip class margins.")
+    lines.append("")
     lines.append("## 4. Real-World Relevance")
     lines.append("- Citation networks: detect mislabeled or manipulated papers.")
     lines.append("- Social graphs: robust user classification under adversarial manipulation.")
@@ -253,8 +295,10 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("- Biomedical networks: stabilize disease-gene predictions under noisy signals.")
     lines.append("")
     lines.append("## 5. Output Artifacts Explained")
-    lines.append("- `results/final_evaluation_table.csv`: GCN static attack/defense metrics.")
-    lines.append("- `results/final_evaluation_table_gat.csv`: GAT static attack/defense metrics.")
+    lines.append("- `results/final_pre_defense_gcn.csv`: GCN baseline + attacks (pre-defense).")
+    lines.append("- `results/final_post_defense_gcn.csv`: GCN post-defense (base + ontology).")
+    lines.append("- `results/final_pre_defense_gat.csv`: GAT baseline + attacks (pre-defense).")
+    lines.append("- `results/final_post_defense_gat.csv`: GAT post-defense (base + ontology).")
     lines.append("- `results/dynamic_gcn_evaluation_table.csv`: GCN dynamic metrics.")
     lines.append("- `results/dynamic_gat_evaluation_table.csv`: GAT dynamic metrics.")
     lines.append("- `results/graph_mosaic.png`: clean/attacked/defended subgraph.")
@@ -269,6 +313,8 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("- Baseline vs attacked rows show robustness drops.")
     lines.append("- Defense rows show recovery; best defense should exceed attacked accuracy.")
     lines.append("- Ontology defenses are explicitly labeled and included in the tables.")
+    if worst_attack_name:
+        lines.append(f"- Most impactful attack for GCN in this run: **{worst_attack_name}**.")
     lines.append("")
     lines.append("## 7. Attack Mechanisms with Dataset Example")
     if attack_examples:
@@ -280,10 +326,22 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
             "Evasion: Feature": "Test-time feature perturbation that flips binary features and adds noise to continuous features.",
             "Evasion: Gradient (FGSM-like)": "Gradient sign attack: X_adv = X + epsilon * sign(∇_X loss).",
         }
+        attack_impl = {
+            "Poisoning: Random Structure": "Implementation: random edge rewiring + 2% feature corruption before retraining.",
+            "Poisoning: Nettack": "Implementation: iterative edge flips around test nodes using a surrogate, 6–16 perturbations per target.",
+            "Poisoning: Meta Attack": "Implementation: perturb edges using a proxy outer loop; retrain on poisoned graph.",
+            "Evasion: Edge Flip": "Implementation: degree-preserving edge flips around test nodes at inference.",
+            "Evasion: Feature": "Implementation: flip binary features and add Gaussian noise to continuous ones at inference only.",
+            "Evasion: Gradient (FGSM-like)": "Implementation: single-step gradient sign perturbation on X at inference.",
+        }
         for name, example in attack_examples.items():
             lines.append(f"### {name}")
             if name in attack_descriptions:
                 lines.append(f"- mechanism: {attack_descriptions[name]}")
+            if name in attack_impl:
+                lines.append(f"- implementation detail: {attack_impl[name]}")
+            lines.append("- why it hurts: the message-passing aggregation mixes corrupted signals, shifting embeddings.")
+            lines.append("- defense used: feature smoothing + consistency (base paper) and ontology feature projection.")
             for k, v in example.items():
                 lines.append(f"- {k}: {v}")
             lines.append("")
@@ -383,6 +441,23 @@ def edge_changes_for_node(clean_adj, attacked_adj, node_id, limit=6):
     added = list(attacked_neighbors - clean_neighbors)[:limit]
     removed = list(clean_neighbors - attacked_neighbors)[:limit]
     return added, removed
+
+
+def changed_nodes_from_adj(clean_adj, attacked_adj):
+    if sp.issparse(clean_adj):
+        diff = (clean_adj != attacked_adj).tocoo()
+        nodes = set(diff.row.tolist()) | set(diff.col.tolist())
+        return list(nodes)
+    diff = np.where(clean_adj != attacked_adj)
+    return list(set(diff[0].tolist()) | set(diff[1].tolist()))
+
+
+def changed_feature_nodes(clean_x, attacked_x, tol=1e-6):
+    if torch.is_tensor(clean_x):
+        diff = (clean_x - attacked_x).abs().sum(dim=1) > tol
+        return diff.nonzero(as_tuple=False).view(-1).cpu().tolist()
+    diff = np.abs(clean_x - attacked_x).sum(axis=1) > tol
+    return np.where(diff)[0].tolist()
 
 
 def make_result_row(attack_name, base_metrics, attack_metrics, clean_probs_test, attack_probs_test, budget, p_rate):
@@ -493,7 +568,7 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
 
 def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, model, model_builder, model_name="GCN"):
     rows = []
-    best = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
+    best_base = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
     best_ontology = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
 
     attacked_metrics, _, _ = evaluate_model(model, attacked_data)
@@ -507,8 +582,8 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         consistency_value = feature_consistency_regularization(data_def_smooth.x, clean_adj)
         m_s, pred_s, p_s = evaluate_model(model, data_def_smooth)
         rows.append((f"Defense: Feature Smoothing (alpha={alpha})", m_s, pred_s, p_s, data_def_smooth, consistency_value, clean_adj))
-        if best["metrics"] is None or m_s["accuracy"] > best["metrics"]["accuracy"]:
-            best = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj}
+        if best_base["metrics"] is None or m_s["accuracy"] > best_base["metrics"]["accuracy"]:
+            best_base = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj}
 
     for lam in lambdas:
         data_def_onto = attacked_data.clone()
@@ -527,22 +602,21 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         if best_ontology["metrics"] is None or m_r["accuracy"] > best_ontology["metrics"]["accuracy"]:
             best_ontology = {"name": "Defense: Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_onto, "adj": clean_adj}
 
-    if best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+    if best_base["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         data_def_retrain = attacked_data.clone()
         data_def_retrain.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=0.95)
         retrained_model = train_model(model_builder(), data_def_retrain, epochs=160)
         m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_retrain)
         rows.append(("Defense: Feature Smoothing + Retrain", m_r, pred_r, p_r, data_def_retrain, 0.0, clean_adj))
-        if m_r["accuracy"] > best["metrics"]["accuracy"]:
-            best = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj}
+        if m_r["accuracy"] > best_base["metrics"]["accuracy"]:
+            best_base = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj}
 
-    if best_ontology["metrics"]["accuracy"] > best["metrics"]["accuracy"]:
-        best = best_ontology
+    overall_best = best_ontology if best_ontology["metrics"]["accuracy"] > best_base["metrics"]["accuracy"] else best_base
 
-    print(f"[{model_name}] Best defense: {best['name']} (acc={best['metrics']['accuracy']:.4f})")
-    if best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+    print(f"[{model_name}] Best defense: {overall_best['name']} (acc={overall_best['metrics']['accuracy']:.4f})")
+    if overall_best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         print(f"[{model_name}] WARNING: best defense did not exceed attacked accuracy ({attacked_metrics['accuracy']:.4f}).")
-    return rows, best, best_ontology
+    return rows, best_base, best_ontology
 
 
 def build_dynamic_attack_payloads(data_dyn, adj_dyn, features_dyn, labels_dyn, idx_train_dyn, idx_test_dyn):
@@ -896,33 +970,38 @@ def main():
                 "budget": payload.get("budget"),
             }
 
-    attack_only = gcn_df[gcn_df["Attack"] != "Baseline"].copy()
+    attack_only = gcn_df[(gcn_df["Attack"] != "Baseline") & (~gcn_df["Attack"].str.contains("Defense"))].copy()
     worst_attack = attack_only.sort_values("Accuracy Drop", ascending=False).iloc[0]
     print("\n=== IMPACT ANALYSIS (GCN, STATIC) ===")
-    print(f"Most impactful attack: {worst_attack['Attack']} with drop={worst_attack['Accuracy Drop']:.4f}")
-    if worst_attack["Attack"] == "Evasion: Feature":
-        print("Confirmed: Evasion: Feature is the most impactful.")
-    else:
-        print("Evasion: Feature is not top in this run; reported actual worst attack.")
+    print(f"The most impactful Attack is : {worst_attack['Attack']}")
 
-    print("\n=== DEFENSES FOR EVASION: FEATURE (STATIC, GCN & GAT) ===")
+    worst_payload = next(p for p in payloads_static if p["name"] == worst_attack["Attack"])
+    worst_data = worst_payload.get("data", data_feature)
+
+    print("\n=== DEFENSES AGAINST MOST IMPACTFUL ATTACK (BASE + ONTOLOGY) ===")
     ontology_pred = None
     ontology_defended_data = None
     adj_onto = None
-    defense_rows, best_defense, best_ontology = apply_feature_defenses(
+    defense_rows, best_base, best_ontology = apply_feature_defenses(
         adj_clean,
         features_clean,
         labels,
-        data_feature,
+        worst_data,
         gcn,
         gcn_builder,
         model_name="GCN-Static",
     )
-    for dname, dmetrics, dpred, dprobs, ddef_data, _, adj_onto_candidate in defense_rows:
-        if "Ontology" in dname:
-            ontology_pred = dpred
-            ontology_defended_data = ddef_data
-            adj_onto = adj_onto_candidate
+    ontology_pred = best_ontology["pred"] if best_ontology["pred"] is not None else None
+    ontology_defended_data = best_ontology["data"] if best_ontology["data"] is not None else None
+    adj_onto = best_ontology["adj"] if best_ontology["adj"] is not None else None
+
+    for best_def in [best_base, best_ontology]:
+        if best_def["metrics"] is None:
+            continue
+        dname = best_def["name"]
+        dmetrics = best_def["metrics"]
+        dprobs = best_def["probs"]
+        adj_onto_candidate = best_def["adj"]
         gcn_df = pd.concat(
             [
                 gcn_df,
@@ -943,16 +1022,22 @@ def main():
             ignore_index=True,
         )
 
-    defense_rows_gat, best_defense_gat, best_ontology_gat = apply_feature_defenses(
+    defense_rows_gat, best_base_gat, best_ontology_gat = apply_feature_defenses(
         adj_clean,
         features_clean,
         labels,
-        data_feature,
+        worst_data,
         gat,
         gat_builder,
         model_name="GAT-Static",
     )
-    for dname, dmetrics, dpred, dprobs, ddef_data, _, adj_onto_candidate in defense_rows_gat:
+    for best_def in [best_base_gat, best_ontology_gat]:
+        if best_def["metrics"] is None:
+            continue
+        dname = best_def["name"]
+        dmetrics = best_def["metrics"]
+        dprobs = best_def["probs"]
+        adj_onto_candidate = best_def["adj"]
         gat_df = pd.concat(
             [
                 gat_df,
@@ -973,65 +1058,68 @@ def main():
             ignore_index=True,
         )
 
-    gcn_df.to_csv("results/final_evaluation_table.csv", index=False)
-    gat_df.to_csv("results/final_evaluation_table_gat.csv", index=False)
+    gcn_df["Accuracy Drop"] = float(gcn_df[gcn_df["Attack"] == "Baseline"]["Accuracy"].iloc[0]) - gcn_df["Accuracy"]
+    gat_df["Accuracy Drop"] = float(gat_df[gat_df["Attack"] == "Baseline"]["Accuracy"].iloc[0]) - gat_df["Accuracy"]
 
-    print("\n=== FINAL TABLE (GCN) ===")
-    print(gcn_df[["Attack", "Accuracy", "F1", "Attack Success Rate", "Margin Drop", "Perturbation Budget"]].to_string(index=False))
+    pre_defense_gcn = gcn_df[(gcn_df["Attack"] == "Baseline") | (~gcn_df["Attack"].str.contains("Defense"))].copy()
+    pre_defense_gat = gat_df[(gat_df["Attack"] == "Baseline") | (~gat_df["Attack"].str.contains("Defense"))].copy()
+
+    base_def_gcn = best_base["name"] if best_base["name"] else "Defense: Feature Smoothing"
+    onto_def_gcn = best_ontology["name"] if best_ontology["name"] else "Defense: Ontology"
+    base_def_gat = best_base_gat["name"] if best_base_gat["name"] else "Defense: Feature Smoothing"
+    onto_def_gat = best_ontology_gat["name"] if best_ontology_gat["name"] else "Defense: Ontology"
+
+    post_defense_gcn = gcn_df[gcn_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gcn, onto_def_gcn])].copy()
+    post_defense_gat = gat_df[gat_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gat, onto_def_gat])].copy()
+
+    pre_defense_gcn.to_csv("results/final_pre_defense_gcn.csv", index=False)
+    post_defense_gcn.to_csv("results/final_post_defense_gcn.csv", index=False)
+    pre_defense_gat.to_csv("results/final_pre_defense_gat.csv", index=False)
+    post_defense_gat.to_csv("results/final_post_defense_gat.csv", index=False)
+
     print_metric_table(
-        "FINAL METRICS TABLE (GCN, STATIC)",
-        gcn_df,
-        [
-            "Attack",
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1",
-            "Macro F1",
-            "Micro F1",
-            "ROC-AUC",
-            "Log-loss",
-            "Classification Margin",
-            "Robustness Score",
-            "Attack Success Rate",
-            "Margin Drop",
-            "Perturbation Rate",
-            "Perturbation Budget",
-        ],
+        "FINAL TABLE (PRE-DEFENSE, GCN)",
+        pre_defense_gcn,
+        ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
     )
     print_metric_table(
-        "FINAL METRICS TABLE (GAT, STATIC)",
-        gat_df,
-        [
-            "Attack",
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1",
-            "Macro F1",
-            "Micro F1",
-            "ROC-AUC",
-            "Log-loss",
-            "Classification Margin",
-            "Robustness Score",
-            "Attack Success Rate",
-            "Margin Drop",
-            "Perturbation Rate",
-            "Perturbation Budget",
-        ],
+        "FINAL TABLE (POST-DEFENSE, GCN)",
+        post_defense_gcn,
+        ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+    )
+    print_metric_table(
+        "FINAL TABLE (PRE-DEFENSE, GAT)",
+        pre_defense_gat,
+        ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+    )
+    print_metric_table(
+        "FINAL TABLE (POST-DEFENSE, GAT)",
+        post_defense_gat,
+        ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
     )
 
     graph_rows = []
-    edge_payload = next(p for p in payloads_static if p["name"] == "Evasion: Edge Flip")
-    if edge_payload.get("data") is not None:
-        adj_structure = adj_from_edge_index(edge_payload["data"].edge_index, edge_payload["data"].num_nodes)
+    if worst_data is not None:
+        adj_attacked = adj_from_edge_index(worst_data.edge_index, worst_data.num_nodes)
     else:
-        adj_structure = adj_clean
+        adj_attacked = adj_clean
+    adj_defended = adj_onto if adj_onto is not None else adj_attacked
+
+    attacked_nodes = []
+    defended_nodes = []
+    if worst_data is not None:
+        attacked_nodes = changed_feature_nodes(data.x, worst_data.x)
+        if not attacked_nodes:
+            attacked_nodes = changed_nodes_from_adj(adj_clean, adj_attacked)
+        if ontology_defended_data is not None:
+            defended_nodes = changed_feature_nodes(worst_data.x, ontology_defended_data.x)
+    if not defended_nodes:
+        defended_nodes = attacked_nodes
 
     for name, adj in [
         ("Clean", adj_clean),
-        ("Attacked (Edge Flip)", adj_structure),
-        ("Defended (Ontology)", adj_onto if adj_onto is not None else adj_clean),
+        (f"Attacked ({worst_attack['Attack']})", adj_attacked),
+        (f"Defended ({onto_def_gcn})", adj_defended),
     ]:
         gm = compute_graph_metrics(adj, labels)
         graph_rows.append(
@@ -1044,19 +1132,17 @@ def main():
         )
     graph_df = pd.DataFrame(graph_rows)
     graph_df.to_csv("results/graph_metrics_static.csv", index=False)
-    print_metric_table(
-        "GRAPH METRICS (STATIC)",
-        graph_df,
-        ["Graph", "Density", "Modularity", "Conductance"],
-    )
 
-    adj_onto_plot = adj_onto if adj_onto is not None else adj_clean
     visualize_graph_mosaic(
         adj_clean,
-        adj_structure,
-        adj_onto_plot,
+        adj_attacked,
+        adj_defended,
         labels,
         target_node=target_node,
+        attacked_nodes=attacked_nodes,
+        defended_nodes=defended_nodes,
+        attack_name=worst_attack["Attack"],
+        defense_name=onto_def_gcn,
         save_path="results/graph_mosaic.png",
     )
 
@@ -1078,9 +1164,12 @@ def main():
     y_true = data.y[data.test_mask].cpu().numpy()
     plot_confusion_matrix(y_true, gcn_preds["Baseline"][data.test_mask].cpu().numpy(), class_names, "results/confusion_baseline.png", "GCN Baseline")
     plot_confusion_matrix(y_true, gcn_preds["Evasion: Feature"][data.test_mask].cpu().numpy(), class_names, "results/confusion_feature_attack.png", "Evasion: Feature")
-    if ontology_pred is None and best_defense["pred"] is not None:
-        ontology_pred = best_defense["pred"]
-        ontology_defended_data = best_defense["data"]
+    if ontology_pred is None and best_ontology["pred"] is not None:
+        ontology_pred = best_ontology["pred"]
+        ontology_defended_data = best_ontology["data"]
+    if ontology_pred is None and best_base["pred"] is not None:
+        ontology_pred = best_base["pred"]
+        ontology_defended_data = best_base["data"]
     plot_confusion_matrix(y_true, ontology_pred[data.test_mask].cpu().numpy(), class_names, "results/confusion_ontology_defense.png", "Best Defense")
 
     with torch.no_grad():
@@ -1184,48 +1273,7 @@ def main():
             dynamic_summary.append({"Attack": attack, "Accuracy": float(row["Accuracy"].iloc[0])})
     pd.DataFrame(dynamic_summary).to_csv("results/dynamic_summary.csv", index=False)
 
-    print_metric_table(
-        "FINAL METRICS TABLE (GCN, DYNAMIC)",
-        gcn_dyn_df,
-        [
-            "Attack",
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1",
-            "Macro F1",
-            "Micro F1",
-            "ROC-AUC",
-            "Log-loss",
-            "Classification Margin",
-            "Robustness Score",
-            "Attack Success Rate",
-            "Margin Drop",
-            "Perturbation Rate",
-            "Perturbation Budget",
-        ],
-    )
-    print_metric_table(
-        "FINAL METRICS TABLE (GAT, DYNAMIC)",
-        gat_dyn_df,
-        [
-            "Attack",
-            "Accuracy",
-            "Precision",
-            "Recall",
-            "F1",
-            "Macro F1",
-            "Micro F1",
-            "ROC-AUC",
-            "Log-loss",
-            "Classification Margin",
-            "Robustness Score",
-            "Attack Success Rate",
-            "Margin Drop",
-            "Perturbation Rate",
-            "Perturbation Budget",
-        ],
-    )
+    # Dynamic tables are saved to CSV but not printed to keep terminal output focused.
 
     dyn_graph_rows = []
     for name, adj in [
@@ -1244,27 +1292,37 @@ def main():
         )
     dyn_graph_df = pd.DataFrame(dyn_graph_rows)
     dyn_graph_df.to_csv("results/graph_metrics_dynamic.csv", index=False)
-    print_metric_table(
-        "GRAPH METRICS (DYNAMIC)",
-        dyn_graph_df,
-        ["Graph", "Density", "Modularity", "Conductance"],
-    )
 
     # Short summary lines for explanation
     summary_lines = [
         f"GCN baseline accuracy: {gcn_metrics['accuracy']:.3f}",
-        f"GCN best defense accuracy: {best_defense['metrics']['accuracy']:.3f}",
+        f"GCN base defense accuracy: {best_base['metrics']['accuracy']:.3f}",
+        f"GCN ontology defense accuracy: {best_ontology['metrics']['accuracy']:.3f}",
         f"GAT baseline accuracy: {gat_metrics['accuracy']:.3f}",
-        f"GAT best defense accuracy: {best_defense_gat['metrics']['accuracy']:.3f}",
+        f"GAT base defense accuracy: {best_base_gat['metrics']['accuracy']:.3f}",
+        f"GAT ontology defense accuracy: {best_ontology_gat['metrics']['accuracy']:.3f}",
+        f"Most impactful attack (GCN): {worst_attack['Attack']}",
         "All attacks are calibrated to reduce accuracy vs baseline.",
         "Defense rows show recovery over attacked performance.",
     ]
-    generate_report("results/final_evaluation_table.csv", "results/final_report.md")
-    write_detailed_explanation("results/detailed_explanation.md", attack_examples=attack_examples, metric_summary=summary_lines)
+    generate_report("results/final_pre_defense_gcn.csv", "results/final_post_defense_gcn.csv", "results/final_report.md")
+    dataset_stats = {
+        "num_nodes": int(data.num_nodes),
+        "num_edges": int(data.num_edges),
+        "num_features": int(data.num_features),
+        "num_classes": int(dataset.num_classes),
+    }
+    write_detailed_explanation(
+        "results/detailed_explanation.md",
+        attack_examples=attack_examples,
+        metric_summary=summary_lines,
+        dataset_stats=dataset_stats,
+        worst_attack_name=worst_attack["Attack"],
+    )
 
     print("\nOutputs written under results/:")
-    print("- final_evaluation_table.csv (GCN static)")
-    print("- final_evaluation_table_gat.csv (GAT static)")
+    print("- final_pre_defense_gcn.csv / final_post_defense_gcn.csv")
+    print("- final_pre_defense_gat.csv / final_post_defense_gat.csv")
     print("- dynamic_gcn_evaluation_table.csv")
     print("- dynamic_gat_evaluation_table.csv")
     print("- graph_metrics_static.csv / graph_metrics_dynamic.csv")
