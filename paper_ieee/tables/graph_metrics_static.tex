@@ -1,0 +1,16 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{llll}
+\toprule
+Graph & Density & Modularity & Conductance \\
+\midrule
+Clean & 0.001 & 0.640 & 0.201 \\
+Attacked (Evasion: Gradient (FGSM-like)) & 0.001 & 0.640 & 0.201 \\
+Defended (Defense: Ontology + Retrain) & 0.001 & 0.640 & 0.201 \\
+\bottomrule
+\end{tabular}
+
+\caption{Static graph structural metrics (computed on label-induced communities).}
+\label{tab:graph_metrics_static}
+\end{table}

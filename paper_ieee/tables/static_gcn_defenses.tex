@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lllllll}
+\toprule
+Attack & Accuracy & F1 & ROC-AUC & Log-loss & Classification Margin & Perturbation Budget \\
+\midrule
+Baseline & 0.802 & 0.792 & 0.961 & 0.942 & 0.309 & 0.000 \\
+Evasion: Gradient (FGSM-like) & 0.004 & 0.002 & 0.053 & 15.735 & 0.896 & 0.080 \\
+Defense: Feature Smoothing + Retrain & 0.895 & 0.905 & 0.992 & 0.331 & 0.801 & 0.700 \\
+Defense: Ontology + Retrain & 0.937 & 0.933 & 0.993 & 0.298 & 0.745 & 0.300 \\
+\bottomrule
+\end{tabular}
+
+\caption{Static (Cora) post-attack defenses for GCN on the strongest gradient-based feature attack.}
+\label{tab:static_gcn_defenses}
+\end{table*}

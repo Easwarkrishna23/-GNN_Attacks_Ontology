@@ -1,0 +1,17 @@
+\begin{table*}[t]
+\centering
+\small
+\begin{tabular}{lllllll}
+\toprule
+Attack & Accuracy & F1 & ROC-AUC & Log-loss & Classification Margin & Perturbation Budget \\
+\midrule
+Baseline & 0.818 & 0.813 & 0.972 & 0.896 & 0.332 & 0.000 \\
+Evasion: Gradient (FGSM-like) & 0.002 & 0.002 & 0.025 & 15.798 & 0.828 & 0.080 \\
+Defense: Feature Smoothing + Retrain & 0.893 & 0.892 & 0.990 & 0.378 & 0.767 & 0.700 \\
+Defense: Ontology + Retrain & 0.921 & 0.918 & 0.993 & 0.301 & 0.785 & 0.300 \\
+\bottomrule
+\end{tabular}
+
+\caption{Static (Cora) post-attack defenses for GAT on the strongest gradient-based feature attack.}
+\label{tab:static_gat_defenses}
+\end{table*}
