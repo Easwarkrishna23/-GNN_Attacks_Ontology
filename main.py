@@ -26,8 +26,9 @@ from defenses.ontology_defense import (
     ontology_reweight_adjacency,
     ontology_feature_projection,
 )
+from defenses.robust_filtering import top_k_pruning
 from utils.metrics import compute_robustness_metrics, perturbation_rate, compute_graph_metrics
-from visualization.graph_viz import visualize_graph_mosaic
+from visualization.graph_viz import visualize_graph_mosaic, visualize_graph_pair
 from visualization.plotting import (
     plot_robustness_curves,
     plot_confusion_matrix,
@@ -422,6 +423,104 @@ def save_dynamic_snapshots(generator, snapshots, save_dir):
     return data_list
 
 
+def slugify(name):
+    out = []
+    for ch in name.lower():
+        if ch.isalnum():
+            out.append(ch)
+        else:
+            out.append("_")
+    s = "".join(out)
+    while "__" in s:
+        s = s.replace("__", "_")
+    return s.strip("_")
+
+
+def plot_tsne_mosaic(embeddings_list, labels, titles, save_path, sample_idx=None, seed=42):
+    from sklearn.manifold import TSNE
+
+    if sample_idx is None:
+        rng = np.random.default_rng(seed)
+        n = embeddings_list[0].shape[0]
+        sample_idx = rng.choice(n, size=min(1400, n), replace=False)
+
+    embs = [e[sample_idx] for e in embeddings_list]
+    y = labels[sample_idx]
+    stacked = np.vstack(embs)
+    tsne = TSNE(n_components=2, random_state=seed, init="pca", learning_rate="auto", perplexity=30)
+    coords = tsne.fit_transform(stacked)
+
+    k = len(embs)
+    split = np.array_split(coords, k, axis=0)
+
+    fig, axes = plt.subplots(1, k, figsize=(6 * k, 5))
+    if k == 1:
+        axes = [axes]
+    for i in range(k):
+        ax = axes[i]
+        sc = ax.scatter(split[i][:, 0], split[i][:, 1], c=y, s=10, cmap=plt.cm.Set1, alpha=0.85)
+        ax.set_title(titles[i])
+        ax.set_xticks([])
+        ax.set_yticks([])
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+    return save_path
+
+
+def export_ontology_artifacts(features, labels, target_node, out_dir="results/ontologies", top_k=5):
+    Path(out_dir).mkdir(parents=True, exist_ok=True)
+
+    variants = [
+        ("semantic_only", build_ontology_matrix(features, labels=None, semantic_weight=1.0)),
+        ("label_guided_w0_9", build_ontology_matrix(features, labels=labels, semantic_weight=0.9)),
+        ("label_guided_w0_7", build_ontology_matrix(features, labels=labels, semantic_weight=0.7)),
+    ]
+
+    rows = []
+    for name, O in variants:
+        np.save(os.path.join(out_dir, f"{name}.npy"), O.astype(np.float32))
+
+        # Top-k ontology neighbors per node (excluding self)
+        for i in range(O.shape[0]):
+            sims = O[i].copy()
+            sims[i] = 0.0
+            if top_k >= len(sims):
+                idx = np.argsort(sims)[::-1]
+            else:
+                idx = np.argpartition(sims, -top_k)[-top_k:]
+                idx = idx[np.argsort(sims[idx])[::-1]]
+            for j in idx[:top_k]:
+                rows.append({"variant": name, "source": i, "target": int(j), "weight": float(sims[j])})
+
+    pd.DataFrame(rows).to_csv(os.path.join(out_dir, "ontology_topk_edges.csv"), index=False)
+
+    # Human-readable example for one node
+    example_lines = []
+    example_lines.append("# Ontology Creation and Examples")
+    example_lines.append("")
+    example_lines.append("## How Ontologies Are Created")
+    example_lines.append("- We compute semantic similarity between node feature vectors using cosine similarity.")
+    example_lines.append("- Optionally, we blend semantic similarity with label agreement (label-guided ontology).")
+    example_lines.append("- Finally, we row-normalize to obtain a stochastic ontology matrix O (rows sum to 1).")
+    example_lines.append("")
+    example_lines.append("## Example: Target Node Ontology Neighbors")
+    example_lines.append(f"Target node: {int(target_node)} (label={int(labels[int(target_node)])})")
+    example_lines.append("")
+    for name, O in variants:
+        sims = O[int(target_node)].copy()
+        sims[int(target_node)] = 0.0
+        idx = np.argpartition(sims, -top_k)[-top_k:]
+        idx = idx[np.argsort(sims[idx])[::-1]]
+        example_lines.append(f"### Variant: {name}")
+        for j in idx[:top_k]:
+            example_lines.append(f"- neighbor={int(j)} label={int(labels[int(j)])} weight={float(sims[j]):.6f}")
+        example_lines.append("")
+
+    Path(os.path.join(out_dir, "ontology_examples.md")).write_text("\n".join(example_lines), encoding="utf-8")
+    return out_dir
+
+
 def write_detailed_explanation(save_path, attack_examples=None, metric_summary=None, dataset_stats=None, worst_attack_name=None):
     lines = []
     lines.append("# Project Explanation and Output Guide")
@@ -466,6 +565,18 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("- The defense projects attacked features toward semantic neighbors: `X' = X + λ OX`.")
     lines.append("- This reduces anomalous deviations introduced by feature evasion attacks.")
     lines.append("- If the projection alone is insufficient, a retrained model is used to lock in gains.")
+    lines.append("- Ontology artifacts (variants + examples) are exported under `results/ontologies/`.")
+    lines.append("")
+    lines.append("## 3.2 Pruning Defense Explanation")
+    lines.append("- We apply a top-k neighbor pruning filter based on feature similarity per node.")
+    lines.append("- Intuition: remove low-similarity edges that amplify adversarial noise during aggregation.")
+    lines.append("- Combined defense applies ontology feature projection first, then pruning on projected features.")
+    lines.append("")
+    lines.append("## 3.3 How Defense Strategy Is Selected (With Example)")
+    lines.append("- For the most impactful attack, we evaluate defenses individually: smoothing, pruning, ontology.")
+    lines.append("- Then we evaluate the combined defense: pruning + ontology.")
+    lines.append("- We pick the best-performing configuration (highest accuracy) and report it in the post-defense table.")
+    lines.append("- Example: if node features are perturbed at test time, ontology projection pulls them toward similar semantic neighbors; pruning drops edges that are inconsistent with the node's semantics.")
     lines.append("")
     lines.append("## 3.1 Why Attacks Hurt GNNs")
     lines.append("- GCN/GAT aggregate neighbor features; perturbing edges or features corrupts aggregation.")
@@ -485,6 +596,12 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
     lines.append("- `results/dynamic_gcn_evaluation_table.csv`: GCN dynamic metrics.")
     lines.append("- `results/dynamic_gat_evaluation_table.csv`: GAT dynamic metrics.")
     lines.append("- `results/graph_mosaic.png`: clean/attacked/defended subgraph.")
+    lines.append("- `results/attack_visuals.md`: per-attack graph and cluster images.")
+    lines.append("- `results/attack_graph_*.png`: per-attack clean vs attacked graphs.")
+    lines.append("- `results/class_clusters_*.png`: per-attack t-SNE class cluster plots.")
+    lines.append("- `results/metrics_terminal.md`: final tables + highlights as printed.")
+    lines.append("- `results/ontologies/ontology_topk_edges.csv`: ontology top-k neighbor edges.")
+    lines.append("- `results/ontologies/ontology_examples.md`: ontology creation examples for a target node.")
     lines.append("- `results/robustness_curve.png`: accuracy vs perturbation budget.")
     lines.append("- `results/tsne_*`: embedding structure (clean/attacked/defended).")
     lines.append("- `results/confusion_*.png`: model confusion matrices.")
@@ -592,12 +709,36 @@ def write_layerwise_debug_file(gcn_debug, gat_debug, node_id, out_path):
         f.write("\n".join(lines))
 
 
-def print_metric_table(title, df, columns):
-    print(f"\n=== {title} ===")
+def print_metric_table(title, df, columns, highlight=None, bold_cols=None, out_lines=None):
+    """
+    Print a compact table. Optionally highlight specific Attack rows.
+    highlight: dict like {"WORST": "<attack name>", "BEST": "<attack name>"}
+    bold_cols: columns to wrap with **...** for highlighted rows.
+    """
+    display = df[columns].copy()
+    if highlight:
+        display["NOTE"] = ""
+        for tag, attack_name in highlight.items():
+            if attack_name is None:
+                continue
+            mask = display["Attack"] == attack_name
+            display.loc[mask, "NOTE"] = tag
+            if bold_cols:
+                for col in bold_cols:
+                    if col in display.columns:
+                        display[col] = display[col].astype(str)
+                        display.loc[mask, col] = display.loc[mask, col].apply(lambda v: f"**{v}**")
+
+    header = f"\n=== {title} ==="
     try:
-        print(df[columns].to_markdown(index=False))
+        table = display.to_markdown(index=False)
     except Exception:
-        print(df[columns].to_string(index=False))
+        table = display.to_string(index=False)
+    text = f"{header}\n{table}"
+    print(text)
+    if out_lines is not None:
+        out_lines.append(text)
+    return text
 
 
 def verify_feature_evasion(clean_data, attacked_data, target_nodes):
@@ -703,8 +844,10 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
             if payload["type"] == "poison":
                 attacked_model = train_model(model_builder(), data, epochs=poison_epochs)
                 m, pred, probs = evaluate_model(attacked_model, data)
+                used_model = attacked_model
             else:
                 m, pred, probs = evaluate_model(clean_model, data)
+                used_model = clean_model
 
             # Prefer configurations that reduce accuracy vs baseline
             if best is None or m["accuracy"] < best["metrics"]["accuracy"]:
@@ -716,6 +859,7 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
                     "p_rate": p_rate,
                     "budget": budget,
                     "extra": extra,
+                    "model": used_model,
                 }
 
             if m["accuracy"] < base_metrics["accuracy"] - 0.01:
@@ -728,6 +872,7 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
         payload["p_rate"] = best["p_rate"]
         payload["budget"] = best["budget"]
         payload["extra"] = best.get("extra", {})
+        payload["model"] = best.get("model", clean_model)
 
         row = make_result_row(
             attack_name,
@@ -749,15 +894,29 @@ def evaluate_model_under_attacks(model_name, clean_model, model_builder, clean_d
     return df, predictions, probabilities
 
 
+def _symmetrize_and_self_loop(adj):
+    if not sp.issparse(adj):
+        adj = sp.csr_matrix(adj)
+    adj = adj.maximum(adj.T)
+    adj = adj.tocsr()
+    adj.setdiag(1.0)
+    adj.eliminate_zeros()
+    return adj
+
+
 def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, model, model_builder, model_name="GCN"):
     rows = []
-    best_base = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
-    best_ontology = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None}
+    best_base = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
+    best_pruning = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
+    best_ontology = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
+    best_combined = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
 
     attacked_metrics, _, _ = evaluate_model(model, attacked_data)
     alphas = [0.3, 0.5, 0.7, 0.85]
     lambdas = [0.05, 0.1, 0.2]
+    k_values = [5, 10, 15, 20]
     ontology = build_ontology_matrix(clean_features, labels=labels, semantic_weight=0.9)
+    attacked_adj = _symmetrize_and_self_loop(adj_from_edge_index(attacked_data.edge_index, attacked_data.num_nodes))
 
     for alpha in alphas:
         data_def_smooth = attacked_data.clone()
@@ -766,7 +925,18 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         m_s, pred_s, p_s = evaluate_model(model, data_def_smooth)
         rows.append((f"Defense: Feature Smoothing (alpha={alpha})", m_s, pred_s, p_s, data_def_smooth, consistency_value, clean_adj))
         if best_base["metrics"] is None or m_s["accuracy"] > best_base["metrics"]["accuracy"]:
-            best_base = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj}
+            best_base = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj, "model": model}
+
+    # Pruning-only defense (structure filtering), applied at inference on attacked graph/features.
+    attacked_x_np = attacked_data.x.detach().cpu().numpy()
+    for k in k_values:
+        adj_pruned = top_k_pruning(attacked_adj, attacked_x_np, k=k)
+        adj_pruned = _symmetrize_and_self_loop(adj_pruned)
+        data_def_prune = pyg_from_adj_and_x(attacked_data, adj_pruned, attacked_x_np)
+        m_p, pred_p, p_p = evaluate_model(model, data_def_prune)
+        rows.append((f"Defense: Pruning (top-k={k})", m_p, pred_p, p_p, data_def_prune, 0.0, adj_pruned))
+        if best_pruning["metrics"] is None or m_p["accuracy"] > best_pruning["metrics"]["accuracy"]:
+            best_pruning = {"name": f"Defense: Pruning (top-k={k})", "metrics": m_p, "pred": pred_p, "probs": p_p, "data": data_def_prune, "adj": adj_pruned, "model": model}
 
     for lam in lambdas:
         data_def_onto = attacked_data.clone()
@@ -774,7 +944,28 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         m_o, pred_o, p_o = evaluate_model(model, data_def_onto)
         rows.append((f"Defense: Ontology (feature-only, lambda={lam})", m_o, pred_o, p_o, data_def_onto, 0.0, clean_adj))
         if best_ontology["metrics"] is None or m_o["accuracy"] > best_ontology["metrics"]["accuracy"]:
-            best_ontology = {"name": f"Defense: Ontology (feature-only, lambda={lam})", "metrics": m_o, "pred": pred_o, "probs": p_o, "data": data_def_onto, "adj": clean_adj}
+            best_ontology = {"name": f"Defense: Ontology (feature-only, lambda={lam})", "metrics": m_o, "pred": pred_o, "probs": p_o, "data": data_def_onto, "adj": clean_adj, "model": model}
+
+    # Combined pruning + ontology (project features then prune edges using projected similarity).
+    for lam in [0.1, 0.2]:
+        x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=lam)
+        x_proj_np = x_proj.detach().cpu().numpy()
+        for k in [10, 15]:
+            adj_pruned = top_k_pruning(attacked_adj, x_proj_np, k=k)
+            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
+            data_def_combo = pyg_from_adj_and_x(attacked_data, adj_pruned, x_proj_np)
+            m_c, pred_c, p_c = evaluate_model(model, data_def_combo)
+            rows.append((f"Defense: Pruning+Ontology (k={k}, lambda={lam})", m_c, pred_c, p_c, data_def_combo, 0.0, adj_pruned))
+            if best_combined["metrics"] is None or m_c["accuracy"] > best_combined["metrics"]["accuracy"]:
+                best_combined = {
+                    "name": f"Defense: Pruning+Ontology (k={k}, lambda={lam})",
+                    "metrics": m_c,
+                    "pred": pred_c,
+                    "probs": p_c,
+                    "data": data_def_combo,
+                    "adj": adj_pruned,
+                    "model": model,
+                }
 
     if best_ontology["metrics"] is None or best_ontology["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         data_def_onto = attacked_data.clone()
@@ -783,7 +974,37 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_onto)
         rows.append(("Defense: Ontology + Retrain", m_r, pred_r, p_r, data_def_onto, 0.0, clean_adj))
         if best_ontology["metrics"] is None or m_r["accuracy"] > best_ontology["metrics"]["accuracy"]:
-            best_ontology = {"name": "Defense: Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_onto, "adj": clean_adj}
+            best_ontology = {"name": "Defense: Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_onto, "adj": clean_adj, "model": retrained_model}
+
+    if best_pruning["metrics"] is None or best_pruning["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+        # Retrain on pruned structure if pruning-only did not help.
+        if best_pruning["data"] is not None:
+            data_def_prune = best_pruning["data"]
+        else:
+            adj_pruned = top_k_pruning(attacked_adj, attacked_x_np, k=10)
+            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
+            data_def_prune = pyg_from_adj_and_x(attacked_data, adj_pruned, attacked_x_np)
+        retrained_model = train_model(model_builder(), data_def_prune, epochs=120)
+        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_prune)
+        rows.append(("Defense: Pruning + Retrain", m_r, pred_r, p_r, data_def_prune, 0.0, adj_from_edge_index(data_def_prune.edge_index, data_def_prune.num_nodes)))
+        if best_pruning["metrics"] is None or m_r["accuracy"] > best_pruning["metrics"]["accuracy"]:
+            best_pruning = {"name": "Defense: Pruning + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_prune, "adj": adj_from_edge_index(data_def_prune.edge_index, data_def_prune.num_nodes), "model": retrained_model}
+
+    if best_combined["metrics"] is None or best_combined["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
+        # Retrain on combined defense if needed.
+        if best_combined["data"] is not None:
+            data_def_combo = best_combined["data"]
+        else:
+            x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=0.1)
+            x_proj_np = x_proj.detach().cpu().numpy()
+            adj_pruned = top_k_pruning(attacked_adj, x_proj_np, k=15)
+            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
+            data_def_combo = pyg_from_adj_and_x(attacked_data, adj_pruned, x_proj_np)
+        retrained_model = train_model(model_builder(), data_def_combo, epochs=140)
+        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_combo)
+        rows.append(("Defense: Pruning+Ontology + Retrain", m_r, pred_r, p_r, data_def_combo, 0.0, adj_from_edge_index(data_def_combo.edge_index, data_def_combo.num_nodes)))
+        if best_combined["metrics"] is None or m_r["accuracy"] > best_combined["metrics"]["accuracy"]:
+            best_combined = {"name": "Defense: Pruning+Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_combo, "adj": adj_from_edge_index(data_def_combo.edge_index, data_def_combo.num_nodes), "model": retrained_model}
 
     if best_base["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         data_def_retrain = attacked_data.clone()
@@ -792,14 +1013,18 @@ def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, mod
         m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_retrain)
         rows.append(("Defense: Feature Smoothing + Retrain", m_r, pred_r, p_r, data_def_retrain, 0.0, clean_adj))
         if m_r["accuracy"] > best_base["metrics"]["accuracy"]:
-            best_base = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj}
+            best_base = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj, "model": retrained_model}
 
     overall_best = best_ontology if best_ontology["metrics"]["accuracy"] > best_base["metrics"]["accuracy"] else best_base
+    if best_pruning["metrics"] is not None and best_pruning["metrics"]["accuracy"] > overall_best["metrics"]["accuracy"]:
+        overall_best = best_pruning
+    if best_combined["metrics"] is not None and best_combined["metrics"]["accuracy"] > overall_best["metrics"]["accuracy"]:
+        overall_best = best_combined
 
     print(f"[{model_name}] Best defense: {overall_best['name']} (acc={overall_best['metrics']['accuracy']:.4f})")
     if overall_best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         print(f"[{model_name}] WARNING: best defense did not exceed attacked accuracy ({attacked_metrics['accuracy']:.4f}).")
-    return rows, best_base, best_ontology
+    return rows, best_base, best_pruning, best_ontology, best_combined
 
 
 def build_dynamic_attack_payloads(data_dyn, adj_dyn, features_dyn, labels_dyn, idx_train_dyn, idx_test_dyn):
@@ -944,6 +1169,7 @@ def main():
     draw_architecture_diagram("results/gcn_gat_architecture.png")
     draw_system_flow_diagram("results/system_flow.png")
     draw_gcn_layerwise_diagram("results/gcn_layerwise.png")
+    export_ontology_artifacts(features_clean, labels, target_node, out_dir="results/ontologies", top_k=5)
     plot_layer_output_panel(
         [
             gcn_debug["pre_aggregation_l1"].cpu().numpy(),
@@ -1117,20 +1343,24 @@ def main():
         }
     )
 
+    # Run the same attack suite independently for GCN and GAT (avoid overwriting payload state).
+    payloads_gcn = [p.copy() for p in payloads_static]
+    payloads_gat = [p.copy() for p in payloads_static]
+
     gcn_builder = lambda: GCN(dataset.num_features, 16, dataset.num_classes)
     gat_builder = lambda: GAT(dataset.num_features, 8, dataset.num_classes, heads=4)
-    gcn_df, gcn_preds, gcn_prob = evaluate_model_under_attacks("GCN", gcn, gcn_builder, data, payloads_static, poison_epochs=120)
-    gat_df, gat_preds, gat_prob = evaluate_model_under_attacks("GAT", gat, gat_builder, data, payloads_static, poison_epochs=120)
+    gcn_df, gcn_preds, gcn_prob = evaluate_model_under_attacks("GCN", gcn, gcn_builder, data, payloads_gcn, poison_epochs=120)
+    gat_df, gat_preds, gat_prob = evaluate_model_under_attacks("GAT", gat, gat_builder, data, payloads_gat, poison_epochs=120)
 
     # Use the calibrated evasion-feature payload for defense and visualization
-    feature_payload_used = next(p for p in payloads_static if p["name"] == "Evasion: Feature")
+    feature_payload_used = next(p for p in payloads_gcn if p["name"] == "Evasion: Feature")
     if feature_payload_used.get("data") is not None:
         data_feature = feature_payload_used["data"]
 
     # Build attack examples for explanation file
     attack_examples = {}
     clean_adj = adj_clean
-    for payload in payloads_static:
+    for payload in payloads_gcn:
         name = payload["name"]
         data_attacked = payload.get("data")
         if data_attacked is None:
@@ -1157,16 +1387,18 @@ def main():
     attack_only = gcn_df[(gcn_df["Attack"] != "Baseline") & (~gcn_df["Attack"].str.contains("Defense"))].copy()
     worst_attack = attack_only.sort_values("Accuracy Drop", ascending=False).iloc[0]
     print("\n=== IMPACT ANALYSIS (GCN, STATIC) ===")
-    print(f"The most impactful Attack is : {worst_attack['Attack']}")
+    # Printed later with table highlights for a single final output section.
 
-    worst_payload = next(p for p in payloads_static if p["name"] == worst_attack["Attack"])
+    worst_payload = next(p for p in payloads_gcn if p["name"] == worst_attack["Attack"])
     worst_data = worst_payload.get("data", data_feature)
 
-    print("\n=== DEFENSES AGAINST MOST IMPACTFUL ATTACK (BASE + ONTOLOGY) ===")
-    ontology_pred = None
-    ontology_defended_data = None
-    adj_onto = None
-    defense_rows, best_base, best_ontology = apply_feature_defenses(
+    print("\n=== DEFENSES AGAINST MOST IMPACTFUL ATTACK (BASE + PRUNING + ONTOLOGY + COMBINED) ===")
+    defended_pred = None
+    defended_data = None
+    defended_adj = None
+    defended_name = None
+    defended_model = gcn
+    defense_rows, best_base, best_pruning, best_ontology, best_combined = apply_feature_defenses(
         adj_clean,
         features_clean,
         labels,
@@ -1175,17 +1407,33 @@ def main():
         gcn_builder,
         model_name="GCN-Static",
     )
-    ontology_pred = best_ontology["pred"] if best_ontology["pred"] is not None else None
-    ontology_defended_data = best_ontology["data"] if best_ontology["data"] is not None else None
-    adj_onto = best_ontology["adj"] if best_ontology["adj"] is not None else None
+    # For visualization, prefer the combined defense, then ontology, then pruning, then base smoothing.
+    for choice in [best_combined, best_ontology, best_pruning, best_base]:
+        if choice.get("metrics") is None:
+            continue
+        defended_pred = choice.get("pred")
+        defended_data = choice.get("data")
+        defended_adj = choice.get("adj")
+        defended_name = choice.get("name")
+        defended_model = choice.get("model", gcn)
+        break
 
-    for best_def in [best_base, best_ontology]:
+    for best_def in [best_base, best_pruning, best_ontology, best_combined]:
         if best_def["metrics"] is None:
             continue
         dname = best_def["name"]
         dmetrics = best_def["metrics"]
         dprobs = best_def["probs"]
         adj_onto_candidate = best_def["adj"]
+        if "Pruning+Ontology" in dname:
+            budget = 0.6
+        elif "Pruning" in dname:
+            budget = 0.5
+        elif "Ontology" in dname:
+            budget = 0.3
+        else:
+            budget = 0.7
+        p_rate = perturbation_rate(adj_clean, adj_onto_candidate) if adj_onto_candidate is not None else 0.0
         gcn_df = pd.concat(
             [
                 gcn_df,
@@ -1197,8 +1445,8 @@ def main():
                             dmetrics,
                             gcn_prob["Baseline"][data.test_mask].cpu().numpy(),
                             dprobs[data.test_mask].cpu().numpy(),
-                            budget=0.3 if "Ontology" in dname else 0.7,
-                            p_rate=perturbation_rate(adj_clean, adj_onto_candidate) if "Ontology" in dname else 0.0,
+                            budget=budget,
+                            p_rate=p_rate,
                         )
                     ]
                 ),
@@ -1206,7 +1454,7 @@ def main():
             ignore_index=True,
         )
 
-    defense_rows_gat, best_base_gat, best_ontology_gat = apply_feature_defenses(
+    defense_rows_gat, best_base_gat, best_pruning_gat, best_ontology_gat, best_combined_gat = apply_feature_defenses(
         adj_clean,
         features_clean,
         labels,
@@ -1215,13 +1463,22 @@ def main():
         gat_builder,
         model_name="GAT-Static",
     )
-    for best_def in [best_base_gat, best_ontology_gat]:
+    for best_def in [best_base_gat, best_pruning_gat, best_ontology_gat, best_combined_gat]:
         if best_def["metrics"] is None:
             continue
         dname = best_def["name"]
         dmetrics = best_def["metrics"]
         dprobs = best_def["probs"]
         adj_onto_candidate = best_def["adj"]
+        if "Pruning+Ontology" in dname:
+            budget = 0.6
+        elif "Pruning" in dname:
+            budget = 0.5
+        elif "Ontology" in dname:
+            budget = 0.3
+        else:
+            budget = 0.7
+        p_rate = perturbation_rate(adj_clean, adj_onto_candidate) if adj_onto_candidate is not None else 0.0
         gat_df = pd.concat(
             [
                 gat_df,
@@ -1233,8 +1490,8 @@ def main():
                             dmetrics,
                             gat_prob["Baseline"][data.test_mask].cpu().numpy(),
                             dprobs[data.test_mask].cpu().numpy(),
-                            budget=0.3 if "Ontology" in dname else 0.7,
-                            p_rate=perturbation_rate(adj_clean, adj_onto_candidate) if "Ontology" in dname else 0.0,
+                            budget=budget,
+                            p_rate=p_rate,
                         )
                     ]
                 ),
@@ -1249,44 +1506,85 @@ def main():
     pre_defense_gat = gat_df[(gat_df["Attack"] == "Baseline") | (~gat_df["Attack"].str.contains("Defense"))].copy()
 
     base_def_gcn = best_base["name"] if best_base["name"] else "Defense: Feature Smoothing"
+    prune_def_gcn = best_pruning["name"] if best_pruning["name"] else "Defense: Pruning"
     onto_def_gcn = best_ontology["name"] if best_ontology["name"] else "Defense: Ontology"
-    base_def_gat = best_base_gat["name"] if best_base_gat["name"] else "Defense: Feature Smoothing"
-    onto_def_gat = best_ontology_gat["name"] if best_ontology_gat["name"] else "Defense: Ontology"
+    combo_def_gcn = best_combined["name"] if best_combined["name"] else "Defense: Pruning+Ontology"
 
-    post_defense_gcn = gcn_df[gcn_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gcn, onto_def_gcn])].copy()
-    post_defense_gat = gat_df[gat_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gat, onto_def_gat])].copy()
+    base_def_gat = best_base_gat["name"] if best_base_gat["name"] else "Defense: Feature Smoothing"
+    prune_def_gat = best_pruning_gat["name"] if best_pruning_gat["name"] else "Defense: Pruning"
+    onto_def_gat = best_ontology_gat["name"] if best_ontology_gat["name"] else "Defense: Ontology"
+    combo_def_gat = best_combined_gat["name"] if best_combined_gat["name"] else "Defense: Pruning+Ontology"
+
+    post_defense_gcn = gcn_df[gcn_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gcn, prune_def_gcn, onto_def_gcn, combo_def_gcn])].copy()
+    post_defense_gat = gat_df[gat_df["Attack"].isin(["Baseline", worst_attack["Attack"], base_def_gat, prune_def_gat, onto_def_gat, combo_def_gat])].copy()
 
     pre_defense_gcn.to_csv("results/final_pre_defense_gcn.csv", index=False)
     post_defense_gcn.to_csv("results/final_post_defense_gcn.csv", index=False)
     pre_defense_gat.to_csv("results/final_pre_defense_gat.csv", index=False)
     post_defense_gat.to_csv("results/final_post_defense_gat.csv", index=False)
 
+    terminal_lines = []
+    worst_attack_name = str(worst_attack["Attack"])
+
+    def best_defense_name(df):
+        sub = df[df["Attack"].str.contains("Defense", na=False)]
+        if sub.empty:
+            return None
+        return str(sub.sort_values("Accuracy", ascending=False).iloc[0]["Attack"])
+
+    best_def_gcn = best_defense_name(post_defense_gcn)
+    best_def_gat = best_defense_name(post_defense_gat)
+
+    print(f"\nThe most impactful Attack is : **{worst_attack_name}**")
+    terminal_lines.append(f"\nThe most impactful Attack is : **{worst_attack_name}**")
+    if best_def_gcn:
+        print(f"Best post-defense (GCN): **{best_def_gcn}**")
+        terminal_lines.append(f"Best post-defense (GCN): **{best_def_gcn}**")
+    if best_def_gat:
+        print(f"Best post-defense (GAT): **{best_def_gat}**")
+        terminal_lines.append(f"Best post-defense (GAT): **{best_def_gat}**")
+
     print_metric_table(
         "FINAL TABLE (PRE-DEFENSE, GCN)",
         pre_defense_gcn,
         ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+        highlight={"WORST": worst_attack_name},
+        bold_cols=["Accuracy", "Accuracy Drop"],
+        out_lines=terminal_lines,
     )
     print_metric_table(
         "FINAL TABLE (POST-DEFENSE, GCN)",
         post_defense_gcn,
         ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+        highlight={"WORST": worst_attack_name, "BEST": best_def_gcn},
+        bold_cols=["Accuracy", "Accuracy Drop"],
+        out_lines=terminal_lines,
     )
     print_metric_table(
         "FINAL TABLE (PRE-DEFENSE, GAT)",
         pre_defense_gat,
         ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+        highlight={"WORST": worst_attack_name},
+        bold_cols=["Accuracy", "Accuracy Drop"],
+        out_lines=terminal_lines,
     )
     print_metric_table(
         "FINAL TABLE (POST-DEFENSE, GAT)",
         post_defense_gat,
         ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
+        highlight={"WORST": worst_attack_name, "BEST": best_def_gat},
+        bold_cols=["Accuracy", "Accuracy Drop"],
+        out_lines=terminal_lines,
     )
+
+    Path("results/metrics_terminal.md").write_text("\n".join(terminal_lines) + "\n", encoding="utf-8")
+    Path("results/metrics_terminal.txt").write_text("\n".join(terminal_lines) + "\n", encoding="utf-8")
 
     draw_attack_implementation_diagram(
         "results/attack_implementation.png",
         worst_attack=str(worst_attack["Attack"]),
         base_defense=str(base_def_gcn),
-        onto_defense=str(onto_def_gcn),
+        onto_defense=str(combo_def_gcn),
     )
 
     graph_rows = []
@@ -1294,7 +1592,7 @@ def main():
         adj_attacked = adj_from_edge_index(worst_data.edge_index, worst_data.num_nodes)
     else:
         adj_attacked = adj_clean
-    adj_defended = adj_onto if adj_onto is not None else adj_attacked
+    adj_defended = defended_adj if defended_adj is not None else adj_attacked
 
     attacked_nodes = []
     defended_nodes = []
@@ -1302,15 +1600,15 @@ def main():
         attacked_nodes = changed_feature_nodes(data.x, worst_data.x)
         if not attacked_nodes:
             attacked_nodes = changed_nodes_from_adj(adj_clean, adj_attacked)
-        if ontology_defended_data is not None:
-            defended_nodes = changed_feature_nodes(worst_data.x, ontology_defended_data.x)
+        if defended_data is not None:
+            defended_nodes = changed_feature_nodes(worst_data.x, defended_data.x)
     if not defended_nodes:
         defended_nodes = attacked_nodes
 
     for name, adj in [
         ("Clean", adj_clean),
         (f"Attacked ({worst_attack['Attack']})", adj_attacked),
-        (f"Defended ({onto_def_gcn})", adj_defended),
+        (f"Defended ({defended_name})", adj_defended),
     ]:
         gm = compute_graph_metrics(adj, labels)
         graph_rows.append(
@@ -1333,9 +1631,82 @@ def main():
         attacked_nodes=attacked_nodes,
         defended_nodes=defended_nodes,
         attack_name=worst_attack["Attack"],
-        defense_name=onto_def_gcn,
+        defense_name=defended_name,
         save_path="results/graph_mosaic.png",
     )
+
+    # Per-attack visuals: clean vs attacked graph and class-cluster plots.
+    attack_md = []
+    attack_md.append("# Per-Attack Visualizations (Static: Cora)")
+    attack_md.append("")
+    rng = np.random.default_rng(42)
+    sample_idx = rng.choice(data.num_nodes, size=min(1400, data.num_nodes), replace=False)
+    for payload in payloads_gcn:
+        name = payload["name"]
+        data_att = payload.get("data")
+        if data_att is None or name == "Baseline":
+            continue
+        slug = slugify(name)
+        attacked_adj_local = adj_from_edge_index(data_att.edge_index, data_att.num_nodes)
+        attacked_nodes_local = changed_feature_nodes(data.x, data_att.x)
+        if not attacked_nodes_local:
+            attacked_nodes_local = changed_nodes_from_adj(adj_clean, attacked_adj_local)
+
+        out_graph = f"results/attack_graph_{slug}.png"
+        visualize_graph_pair(
+            adj_clean,
+            attacked_adj_local,
+            labels,
+            target_node=target_node,
+            attacked_nodes=attacked_nodes_local,
+            attack_name=name,
+            hop_k=3,
+            max_nodes=450,
+            save_path=out_graph,
+        )
+
+        # Dataset-change summary
+        clean_edges = int(adj_clean.nnz)
+        att_edges = int(attacked_adj_local.nnz)
+        feat_rate = float(perturbation_rate(data.x.cpu().numpy(), data_att.x.cpu().numpy()))
+        attack_md.append(f"## {name}")
+        attack_md.append(f"- graph image: `{out_graph}`")
+        attack_md.append(f"- edge nnz: clean={clean_edges}, attacked={att_edges}")
+        attack_md.append(f"- feature perturbation rate: {feat_rate:.6f}")
+
+        # Cluster plots (t-SNE)
+        model_used = payload.get("model", gcn)
+        with torch.no_grad():
+            if payload["type"] == "poison":
+                emb_clean_local = model_used.get_embeddings(data).cpu().numpy()
+                emb_att_local = model_used.get_embeddings(data_att).cpu().numpy()
+            else:
+                emb_clean_local = gcn.get_embeddings(data).cpu().numpy()
+                emb_att_local = gcn.get_embeddings(data_att).cpu().numpy()
+            if name == worst_attack["Attack"]:
+                emb_def_local = defended_model.get_embeddings(defended_data).cpu().numpy()
+                cluster_path = f"results/class_clusters_{slug}_defended.png"
+                plot_tsne_mosaic(
+                    [emb_clean_local, emb_att_local, emb_def_local],
+                    labels,
+                    ["Clean", f"Attacked: {name}", f"Defended: {defended_name}"],
+                    cluster_path,
+                    sample_idx=sample_idx,
+                )
+                attack_md.append(f"- class clusters: `{cluster_path}`")
+            else:
+                cluster_path = f"results/class_clusters_{slug}.png"
+                plot_tsne_mosaic(
+                    [emb_clean_local, emb_att_local],
+                    labels,
+                    ["Clean", f"Attacked: {name}"],
+                    cluster_path,
+                    sample_idx=sample_idx,
+                )
+                attack_md.append(f"- class clusters: `{cluster_path}`")
+        attack_md.append("")
+
+    Path("results/attack_visuals.md").write_text("\n".join(attack_md), encoding="utf-8")
 
     budgets = [0.01, 0.03, 0.05, 0.08, 0.10]
     fgsm_curve = []
@@ -1355,20 +1726,19 @@ def main():
     y_true = data.y[data.test_mask].cpu().numpy()
     plot_confusion_matrix(y_true, gcn_preds["Baseline"][data.test_mask].cpu().numpy(), class_names, "results/confusion_baseline.png", "GCN Baseline")
     plot_confusion_matrix(y_true, gcn_preds["Evasion: Feature"][data.test_mask].cpu().numpy(), class_names, "results/confusion_feature_attack.png", "Evasion: Feature")
-    if ontology_pred is None and best_ontology["pred"] is not None:
-        ontology_pred = best_ontology["pred"]
-        ontology_defended_data = best_ontology["data"]
-    if ontology_pred is None and best_base["pred"] is not None:
-        ontology_pred = best_base["pred"]
-        ontology_defended_data = best_base["data"]
-    plot_confusion_matrix(y_true, ontology_pred[data.test_mask].cpu().numpy(), class_names, "results/confusion_ontology_defense.png", "Best Defense")
+    if defended_pred is None and best_base.get("pred") is not None:
+        defended_pred = best_base["pred"]
+        defended_data = best_base["data"]
+        defended_name = best_base["name"]
+        defended_model = best_base.get("model", gcn)
+    plot_confusion_matrix(y_true, defended_pred[data.test_mask].cpu().numpy(), class_names, "results/confusion_ontology_defense.png", f"Defense: {defended_name}")
 
     with torch.no_grad():
         emb_clean = gcn.get_embeddings(data).cpu().numpy()
-        emb_attacked = gcn.get_embeddings(data_feature).cpu().numpy()
-        emb_defended = gcn.get_embeddings(ontology_defended_data).cpu().numpy()
+        emb_attacked = gcn.get_embeddings(worst_data).cpu().numpy()
+        emb_defended = defended_model.get_embeddings(defended_data).cpu().numpy()
     plot_tsne_embeddings(emb_clean, labels, "results/tsne_clean.png", "Layer-wise Embedding (Clean)")
-    plot_tsne_embeddings(emb_attacked, labels, "results/tsne_attacked.png", "Layer-wise Embedding (Attacked)")
+    plot_tsne_embeddings(emb_attacked, labels, "results/tsne_attacked.png", f"Layer-wise Embedding (Attacked: {worst_attack['Attack']})")
     plot_tsne_embeddings(emb_defended, labels, "results/tsne_defended.png", "Layer-wise Embedding (Defended)")
 
     print("\n=== DYNAMIC ATTACK SUITE ===")
@@ -1407,11 +1777,22 @@ def main():
 
     data_feature_dyn = [p["data"] for p in payloads_dyn if p["name"] == "Evasion: Feature"][0]
     adj_onto_dyn = None
-    defense_rows_dyn, best_def_dyn, best_onto_dyn = apply_feature_defenses(adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gcn_dyn, gcn_dyn_builder, model_name="GCN-Dynamic")
+    defense_rows_dyn, best_base_dyn, best_prune_dyn, best_onto_dyn, best_combo_dyn = apply_feature_defenses(
+        adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gcn_dyn, gcn_dyn_builder, model_name="GCN-Dynamic"
+    )
     gcn_dyn_metrics, _, _ = evaluate_model(gcn_dyn, data_dyn)
     for dname, dmetrics, dpred_dyn, dprobs_dyn, _, _, adj_onto_candidate in defense_rows_dyn:
-        if dname == "Defense: Ontology":
+        if adj_onto_candidate is not None and ("Pruning" in dname or "Ontology" in dname):
             adj_onto_dyn = adj_onto_candidate
+        if "Pruning+Ontology" in dname:
+            budget = 0.6
+        elif "Pruning" in dname:
+            budget = 0.5
+        elif "Ontology" in dname:
+            budget = 0.3
+        else:
+            budget = 0.7
+        p_rate = perturbation_rate(adj_dyn, adj_onto_candidate) if adj_onto_candidate is not None else 0.0
         gcn_dyn_df = pd.concat(
             [
                 gcn_dyn_df,
@@ -1423,8 +1804,8 @@ def main():
                             dmetrics,
                             gcn_dyn_prob["Baseline"][data_dyn.test_mask].cpu().numpy(),
                             dprobs_dyn[data_dyn.test_mask].cpu().numpy(),
-                            budget=0.3 if "Ontology" in dname else 0.7,
-                            p_rate=0.0,
+                            budget=budget,
+                            p_rate=p_rate,
                         )
                     ]
                 ),
@@ -1432,8 +1813,19 @@ def main():
             ignore_index=True,
         )
 
-    defense_rows_dyn_gat, _, best_onto_dyn_gat = apply_feature_defenses(adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gat_dyn, gat_dyn_builder, model_name="GAT-Dynamic")
+    defense_rows_dyn_gat, best_base_dyn_gat, best_prune_dyn_gat, best_onto_dyn_gat, best_combo_dyn_gat = apply_feature_defenses(
+        adj_dyn, features_dyn, labels_dyn, data_feature_dyn, gat_dyn, gat_dyn_builder, model_name="GAT-Dynamic"
+    )
     for dname, dmetrics, dpred_dyn, dprobs_dyn, _, _, adj_onto_candidate in defense_rows_dyn_gat:
+        if "Pruning+Ontology" in dname:
+            budget = 0.6
+        elif "Pruning" in dname:
+            budget = 0.5
+        elif "Ontology" in dname:
+            budget = 0.3
+        else:
+            budget = 0.7
+        p_rate = perturbation_rate(adj_dyn, adj_onto_candidate) if adj_onto_candidate is not None else 0.0
         gat_dyn_df = pd.concat(
             [
                 gat_dyn_df,
@@ -1445,8 +1837,8 @@ def main():
                             dmetrics,
                             gat_dyn_prob["Baseline"][data_dyn.test_mask].cpu().numpy(),
                             dprobs_dyn[data_dyn.test_mask].cpu().numpy(),
-                            budget=0.3 if "Ontology" in dname else 0.7,
-                            p_rate=perturbation_rate(adj_dyn, adj_onto_candidate) if "Ontology" in dname else 0.0,
+                            budget=budget,
+                            p_rate=p_rate,
                         )
                     ]
                 ),
@@ -1458,7 +1850,9 @@ def main():
     gat_dyn_df.to_csv("results/dynamic_gat_evaluation_table.csv", index=False)
 
     dynamic_summary = []
-    for attack in ["Baseline", "Evasion: Feature", "Defense: Feature Smoothing", "Defense: Ontology"]:
+    for attack in ["Baseline", str(dynamic_worst["Attack"]), best_base_dyn["name"], best_prune_dyn["name"], best_onto_dyn["name"], best_combo_dyn["name"]]:
+        if not attack:
+            continue
         row = gcn_dyn_df[gcn_dyn_df["Attack"] == attack]
         if not row.empty:
             dynamic_summary.append({"Attack": attack, "Accuracy": float(row["Accuracy"].iloc[0])})

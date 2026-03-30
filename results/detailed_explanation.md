@@ -39,6 +39,18 @@
 - The defense projects attacked features toward semantic neighbors: `X' = X + λ OX`.
 - This reduces anomalous deviations introduced by feature evasion attacks.
 - If the projection alone is insufficient, a retrained model is used to lock in gains.
+- Ontology artifacts (variants + examples) are exported under `results/ontologies/`.
+
+## 3.2 Pruning Defense Explanation
+- We apply a top-k neighbor pruning filter based on feature similarity per node.
+- Intuition: remove low-similarity edges that amplify adversarial noise during aggregation.
+- Combined defense applies ontology feature projection first, then pruning on projected features.
+
+## 3.3 How Defense Strategy Is Selected (With Example)
+- For the most impactful attack, we evaluate defenses individually: smoothing, pruning, ontology.
+- Then we evaluate the combined defense: pruning + ontology.
+- We pick the best-performing configuration (highest accuracy) and report it in the post-defense table.
+- Example: if node features are perturbed at test time, ontology projection pulls them toward similar semantic neighbors; pruning drops edges that are inconsistent with the node's semantics.
 
 ## 3.1 Why Attacks Hurt GNNs
 - GCN/GAT aggregate neighbor features; perturbing edges or features corrupts aggregation.
@@ -58,6 +70,12 @@
 - `results/dynamic_gcn_evaluation_table.csv`: GCN dynamic metrics.
 - `results/dynamic_gat_evaluation_table.csv`: GAT dynamic metrics.
 - `results/graph_mosaic.png`: clean/attacked/defended subgraph.
+- `results/attack_visuals.md`: per-attack graph and cluster images.
+- `results/attack_graph_*.png`: per-attack clean vs attacked graphs.
+- `results/class_clusters_*.png`: per-attack t-SNE class cluster plots.
+- `results/metrics_terminal.md`: final tables + highlights as printed.
+- `results/ontologies/ontology_topk_edges.csv`: ontology top-k neighbor edges.
+- `results/ontologies/ontology_examples.md`: ontology creation examples for a target node.
 - `results/robustness_curve.png`: accuracy vs perturbation budget.
 - `results/tsne_*`: embedding structure (clean/attacked/defended).
 - `results/confusion_*.png`: model confusion matrices.
@@ -90,9 +108,9 @@
 - defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
-- edges_added_sample: [np.int32(1601), np.int32(2627), np.int32(1765), np.int32(46), np.int32(1744), np.int32(1489)]
-- edges_removed_sample: [np.int32(1857), np.int32(873), np.int32(2314), np.int32(2313), np.int32(467)]
-- budget: 128
+- edges_added_sample: [np.int32(1744), np.int32(1713), np.int32(1238), np.int32(919), np.int32(1150), np.int32(2685)]
+- edges_removed_sample: [np.int32(2314), np.int32(467)]
+- budget: 64
 
 ### Poisoning: Meta Attack
 - mechanism: Bi-level poisoning that optimizes perturbations to maximize validation loss after training.
@@ -103,7 +121,7 @@
 - label: 3
 - edges_added_sample: []
 - edges_removed_sample: []
-- budget: 4000
+- budget: 2000
 
 ### Evasion: Edge Flip
 - mechanism: Test-time structural perturbation that swaps or flips edges around target nodes.
@@ -112,9 +130,9 @@
 - defense used: feature smoothing + consistency (base paper) and ontology feature projection.
 - target_node: 1708
 - label: 3
-- edges_added_sample: [np.int32(2108), np.int32(2333)]
-- edges_removed_sample: [np.int32(467), np.int32(1358)]
-- budget: 120
+- edges_added_sample: [np.int32(2333)]
+- edges_removed_sample: [np.int32(1358)]
+- budget: 80
 
 ### Evasion: Feature
 - mechanism: Test-time feature perturbation that flips binary features and adds noise to continuous features.
@@ -140,11 +158,11 @@
 
 ## 8. Output Interpretation Summary
 - GCN baseline accuracy: 0.802
-- GCN base defense accuracy: 0.895
+- GCN base defense accuracy: 0.887
 - GCN ontology defense accuracy: 0.937
 - GAT baseline accuracy: 0.818
-- GAT base defense accuracy: 0.893
-- GAT ontology defense accuracy: 0.921
+- GAT base defense accuracy: 0.927
+- GAT ontology defense accuracy: 0.930
 - Most impactful attack (GCN): Evasion: Gradient (FGSM-like)
 - All attacks are calibrated to reduce accuracy vs baseline.
 - Defense rows show recovery over attacked performance.
