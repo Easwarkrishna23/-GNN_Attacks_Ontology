@@ -226,6 +226,189 @@ def draw_system_flow_diagram(save_path):
     plt.close()
 
 
+def draw_gcn_layerwise_diagram(save_path):
+    fig, ax = plt.subplots(figsize=(20, 9))
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="#f2f2f2", fontsize=9):
+        patch = FancyBboxPatch(
+            (x, y),
+            w,
+            h,
+            boxstyle="round,pad=0.02",
+            linewidth=1.6,
+            edgecolor="black",
+            facecolor=color,
+        )
+        ax.add_patch(patch)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fontsize)
+
+    def arrow(p0, p1):
+        ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="->", mutation_scale=14, linewidth=1.8))
+
+    def stacked_input(x, y, w, h, label):
+        offsets = [(0.00, 0.00), (0.02, 0.02), (0.04, 0.04)]
+        for dx, dy in offsets:
+            rect = FancyBboxPatch(
+                (x + dx, y + dy),
+                w,
+                h,
+                boxstyle="round,pad=0.02",
+                linewidth=1.0,
+                edgecolor="#7f7f7f",
+                facecolor="#ffffff",
+            )
+            ax.add_patch(rect)
+            nodes = [
+                (x + dx + 0.05, y + dy + 0.12),
+                (x + dx + 0.10, y + dy + 0.08),
+                (x + dx + 0.07, y + dy + 0.03),
+                (x + dx + 0.12, y + dy + 0.03),
+            ]
+            for nx_, ny_ in nodes:
+                ax.add_patch(Circle((nx_, ny_), 0.008, color="#4c78a8"))
+            ax.plot([nodes[0][0], nodes[1][0]], [nodes[0][1], nodes[1][1]], color="#4c78a8", linewidth=1.2)
+            ax.plot([nodes[1][0], nodes[2][0]], [nodes[1][1], nodes[2][1]], color="#4c78a8", linewidth=1.2)
+            ax.plot([nodes[1][0], nodes[3][0]], [nodes[1][1], nodes[3][1]], color="#4c78a8", linewidth=1.2)
+        ax.text(x + w / 2 + 0.03, y - 0.04, label, ha="center", va="top", fontsize=10)
+
+    ax.text(0.02, 0.95, "GCN: Detailed Layer-Wise Node Classification Flow (Project Scope)", fontsize=15, weight="bold")
+
+    # Input
+    stacked_input(0.02, 0.58, 0.16, 0.30, "Input Graph (Cora)\nAdjacency A and Features X")
+    box(0.22, 0.68, 0.18, 0.16, "Inputs\nX ∈ R^{N×F}\nA ∈ {0,1}^{N×N}", "#e8f0ff", fontsize=10)
+    box(0.42, 0.68, 0.18, 0.16, "Add Self-Loops\nÂ = A + I\nDegree: D̂", "#e8f0ff", fontsize=10)
+    box(
+        0.62,
+        0.68,
+        0.22,
+        0.16,
+        "Normalize Adjacency\nS = D̂^{-1/2} Â D̂^{-1/2}\n(used in every layer)",
+        "#e8f0ff",
+        fontsize=9,
+    )
+
+    arrow((0.18, 0.73), (0.22, 0.76))
+    arrow((0.40, 0.76), (0.42, 0.76))
+    arrow((0.60, 0.76), (0.62, 0.76))
+
+    # Layer 1
+    box(
+        0.22,
+        0.38,
+        0.30,
+        0.20,
+        "GCN Layer 1\nPre-aggregation: X W^{(0)}\nMessage passing: S (X W^{(0)})\nActivation: H^{(1)} = ReLU(S X W^{(0)})",
+        "#fff3e6",
+        fontsize=9,
+    )
+    box(0.54, 0.41, 0.12, 0.14, "Layer-1 Output\nH^{(1)}", "#f0f0f0", fontsize=10)
+    arrow((0.40, 0.68), (0.28, 0.58))
+    arrow((0.73, 0.68), (0.40, 0.58))
+    arrow((0.52, 0.48), (0.54, 0.48))
+
+    # Layer 2
+    box(
+        0.68,
+        0.38,
+        0.30,
+        0.20,
+        "GCN Layer 2\nPre-aggregation: H^{(1)} W^{(1)}\nMessage passing: S (H^{(1)} W^{(1)})\nLogits: L = S H^{(1)} W^{(1)}\nSoftmax: Z = softmax(L)",
+        "#fff3e6",
+        fontsize=9,
+    )
+    arrow((0.66, 0.48), (0.68, 0.48))
+
+    # Output and classification
+    box(0.22, 0.12, 0.30, 0.18, "Output Probabilities\nZ ∈ R^{N×C}\nZ_i = softmax(L_i)", "#f7f7f7", fontsize=10)
+    box(
+        0.54,
+        0.12,
+        0.44,
+        0.18,
+        "Node Classification\nFor each node i:\nŷ_i = argmax_c Z_{i,c}\nCompare ŷ_i with label y_i on test nodes",
+        "#f7f7f7",
+        fontsize=10,
+    )
+    arrow((0.83, 0.38), (0.32, 0.30))
+    arrow((0.40, 0.21), (0.54, 0.21))
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
+def draw_attack_implementation_diagram(save_path, worst_attack=None, base_defense=None, onto_defense=None):
+    fig, ax = plt.subplots(figsize=(20, 9))
+    ax.axis("off")
+
+    def box(x, y, w, h, text, color="#f2f2f2", fontsize=9):
+        patch = FancyBboxPatch(
+            (x, y),
+            w,
+            h,
+            boxstyle="round,pad=0.02",
+            linewidth=1.6,
+            edgecolor="black",
+            facecolor=color,
+        )
+        ax.add_patch(patch)
+        ax.text(x + w / 2, y + h / 2, text, ha="center", va="center", fontsize=fontsize)
+
+    def arrow(p0, p1):
+        ax.add_patch(FancyArrowPatch(p0, p1, arrowstyle="->", mutation_scale=14, linewidth=1.8))
+
+    ax.text(0.02, 0.95, "Attack Implementation: Clean → Attack → Worst-Attack Selection → Defense → Metrics", fontsize=15, weight="bold")
+
+    # Clean + baseline
+    box(0.03, 0.74, 0.22, 0.16, "Clean Dataset\nX, A\n(Cora / Dynamic)", "#e6f0ff", fontsize=10)
+    box(0.28, 0.74, 0.22, 0.16, "Train Baseline\nGCN / GAT\n(on clean data)", "#fef9e7", fontsize=10)
+    box(0.53, 0.74, 0.20, 0.16, "Baseline Metrics\nAccuracy, F1,\nROC-AUC", "#f7f7f7", fontsize=10)
+
+    arrow((0.25, 0.82), (0.28, 0.82))
+    arrow((0.50, 0.82), (0.53, 0.82))
+
+    # Poisoning branch
+    box(0.03, 0.48, 0.22, 0.18, "Poisoning Attacks\n(train-time)\nRandom / Nettack / Meta", "#fdecea", fontsize=10)
+    box(0.28, 0.48, 0.22, 0.18, "Poisoned Train Data\nA_poison = A + ΔA\nX_poison = X + ΔX", "#fdecea", fontsize=10)
+    box(0.53, 0.48, 0.20, 0.18, "Retrain Model\non poisoned data", "#fef9e7", fontsize=10)
+    box(0.76, 0.48, 0.21, 0.18, "Poisoning Metrics\n(drop vs baseline)", "#f7f7f7", fontsize=10)
+
+    arrow((0.25, 0.57), (0.28, 0.57))
+    arrow((0.50, 0.57), (0.53, 0.57))
+    arrow((0.73, 0.57), (0.76, 0.57))
+
+    # Evasion branch
+    box(0.03, 0.22, 0.22, 0.18, "Evasion Attacks\n(test-time)\nEdge Flip / Feature / FGSM-like", "#fdecea", fontsize=10)
+    box(0.28, 0.22, 0.22, 0.18, "Attacked Inference Input\nA_adv = A + ΔA (structure)\nX_adv = X + ΔX (feature)", "#fdecea", fontsize=10)
+    box(0.53, 0.22, 0.20, 0.18, "Evaluate\n(no retraining)\nBaseline model", "#fef9e7", fontsize=10)
+    box(0.76, 0.22, 0.21, 0.18, "Evasion Metrics\n(drop vs baseline)", "#f7f7f7", fontsize=10)
+
+    arrow((0.25, 0.31), (0.28, 0.31))
+    arrow((0.50, 0.31), (0.53, 0.31))
+    arrow((0.73, 0.31), (0.76, 0.31))
+
+    # Worst attack selection + defenses
+    worst_text = worst_attack if worst_attack else "Worst Attack\n(by accuracy drop)"
+    base_text = base_defense if base_defense else "Base Defense\nFeature smoothing + consistency"
+    onto_text = onto_defense if onto_defense else "Ontology Defense\nX' = X + λ OX"
+
+    box(0.53, 0.06, 0.20, 0.12, worst_text, "#f7f7f7", fontsize=10)
+    box(0.03, 0.06, 0.22, 0.12, base_text + "\nX_s = αX + (1-α)ÂX\n||X-ÂX||^2", "#e8f5e9", fontsize=9)
+    box(0.28, 0.06, 0.22, 0.12, onto_text + "\nReweight / Project features", "#e8f5e9", fontsize=9)
+    box(0.76, 0.06, 0.21, 0.12, "Post-Defense Metrics\n(should recover)", "#f7f7f7", fontsize=10)
+
+    arrow((0.86, 0.22), (0.63, 0.18))
+    arrow((0.86, 0.48), (0.63, 0.18))
+    arrow((0.63, 0.06), (0.76, 0.12))
+    arrow((0.25, 0.12), (0.53, 0.12))
+    arrow((0.50, 0.12), (0.53, 0.12))
+
+    plt.tight_layout()
+    plt.savefig(save_path)
+    plt.close()
+
+
 def save_dynamic_snapshots(generator, snapshots, save_dir):
     Path(save_dir).mkdir(parents=True, exist_ok=True)
     data_list = []
@@ -760,6 +943,7 @@ def main():
     write_layerwise_debug_file(gcn_debug, gat_debug, target_node, "results/layerwise_debug_report.md")
     draw_architecture_diagram("results/gcn_gat_architecture.png")
     draw_system_flow_diagram("results/system_flow.png")
+    draw_gcn_layerwise_diagram("results/gcn_layerwise.png")
     plot_layer_output_panel(
         [
             gcn_debug["pre_aggregation_l1"].cpu().numpy(),
@@ -1098,6 +1282,13 @@ def main():
         ["Attack", "Accuracy", "F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"],
     )
 
+    draw_attack_implementation_diagram(
+        "results/attack_implementation.png",
+        worst_attack=str(worst_attack["Attack"]),
+        base_defense=str(base_def_gcn),
+        onto_defense=str(onto_def_gcn),
+    )
+
     graph_rows = []
     if worst_data is not None:
         adj_attacked = adj_from_edge_index(worst_data.edge_index, worst_data.num_nodes)
@@ -1328,7 +1519,8 @@ def main():
     print("- graph_metrics_static.csv / graph_metrics_dynamic.csv")
     print("- layerwise_debug_report.md")
     print("- layer_outputs_gcn.png / layer_outputs_gat.png")
-    print("- gcn_gat_architecture.png / system_flow.png")
+    print("- gcn_gat_architecture.png / gcn_layerwise.png / system_flow.png")
+    print("- attack_implementation.png")
     print("- graph_mosaic.png / clean_graph.png / robustness_curve.png")
     print("- tsne_clean.png / tsne_attacked.png / tsne_defended.png")
     print("- confusion_baseline.png / confusion_feature_attack.png / confusion_ontology_defense.png")
