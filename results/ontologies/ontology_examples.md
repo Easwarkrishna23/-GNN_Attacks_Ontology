@@ -19,8 +19,8 @@ Target node: 1708 (label=3)
 - neighbor=1301 label=3 weight=0.002144
 - neighbor=1949 label=3 weight=0.001875
 - neighbor=1806 label=3 weight=0.001700
-- neighbor=2484 label=3 weight=0.001633
 - neighbor=1340 label=3 weight=0.001633
+- neighbor=2484 label=3 weight=0.001633
 
 ### Variant: label_guided_w0_7
 - neighbor=1301 label=3 weight=0.001685

@@ -1,81 +1,85 @@
-import torch
-import torch.nn.functional as F
-from torch_geometric.nn import GCNConv
-import scipy.sparse as sp
 import numpy as np
+import scipy.sparse as sp
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
 
-class GCN(torch.nn.Module):
+
+def _scipy_to_torch_sparse(mat: sp.csr_matrix, device=None, dtype=torch.float32):
+    mat = mat.tocoo()
+    idx = torch.tensor(np.vstack([mat.row, mat.col]), dtype=torch.long, device=device)
+    val = torch.tensor(mat.data, dtype=dtype, device=device)
+    return torch.sparse_coo_tensor(idx, val, size=mat.shape, device=device, dtype=dtype).coalesce()
+
+
+def normalized_adjacency(edge_index: torch.Tensor, num_nodes: int) -> sp.csr_matrix:
+    row = edge_index[0].cpu().numpy()
+    col = edge_index[1].cpu().numpy()
+    val = np.ones(edge_index.size(1), dtype=np.float32)
+    adj = sp.coo_matrix((val, (row, col)), shape=(num_nodes, num_nodes), dtype=np.float32)
+    adj = adj.tocsr()
+    adj = adj.maximum(adj.T)
+    adj = adj + sp.eye(num_nodes, dtype=np.float32, format="csr")
+    deg = np.array(adj.sum(axis=1)).flatten()
+    deg_inv_sqrt = np.power(deg, -0.5, where=deg > 0)
+    deg_inv_sqrt[~np.isfinite(deg_inv_sqrt)] = 0.0
+    d_inv_sqrt = sp.diags(deg_inv_sqrt.astype(np.float32))
+    return (d_inv_sqrt @ adj @ d_inv_sqrt).tocsr()
+
+
+class GCN(nn.Module):
     """
-    Standard 2-layer GCN architecture.
+    Pure-PyTorch 2-layer GCN (Kipf & Welling) that does NOT require torch_geometric.
     """
+
     def __init__(self, num_features, num_hidden, num_classes, dropout=0.5):
-        super(GCN, self).__init__()
-        self.conv1 = GCNConv(num_features, num_hidden)
-        self.conv2 = GCNConv(num_hidden, num_classes)
-        self.dropout = dropout
+        super().__init__()
+        self.lin1 = nn.Linear(num_features, num_hidden, bias=True)
+        self.lin2 = nn.Linear(num_hidden, num_classes, bias=True)
+        self.dropout = float(dropout)
 
-    def forward(self, data, edge_weight=None):
-        x, edge_index = data.x, data.edge_index
-        
-        # If edge_weight is not provided in call, check if data has it
-        if edge_weight is None and hasattr(data, 'edge_weight'):
-            edge_weight = data.edge_weight
+    def _get_S(self, data):
+        # Cache the normalized adjacency for the current edge_index.
+        if not hasattr(data, "_S_sp") or not hasattr(data, "_S_edge_hash"):
+            data._S_sp = None
+            data._S_edge_hash = None
+        edge_hash = int(torch.sum(data.edge_index).item()) + int(data.edge_index.numel())
+        if data._S_sp is None or data._S_edge_hash != edge_hash:
+            S = normalized_adjacency(data.edge_index, data.num_nodes)
+            data._S_sp = S
+            data._S_edge_hash = edge_hash
+        return data._S_sp
 
-        # Layer 1: Feature aggregation + hidden embedding
-        x = self.conv1(x, edge_index, edge_weight)
-        x = F.relu(x)
-        x = F.dropout(x, p=self.dropout, training=self.training)
-        
-        # Layer 2: Class logits
-        x = self.conv2(x, edge_index, edge_weight)
+    def forward(self, data):
+        x = data.x
+        S_sp = self._get_S(data)
+        S = _scipy_to_torch_sparse(S_sp, device=x.device, dtype=x.dtype)
 
-        return F.log_softmax(x, dim=1)
-
-    @staticmethod
-    def _normalized_adjacency(edge_index, num_nodes):
-        row = edge_index[0].cpu().numpy()
-        col = edge_index[1].cpu().numpy()
-        val = np.ones(edge_index.size(1), dtype=np.float32)
-        adj = sp.coo_matrix((val, (row, col)), shape=(num_nodes, num_nodes))
-        adj = adj + sp.eye(num_nodes, dtype=np.float32)
-        deg = np.array(adj.sum(axis=1)).flatten()
-        deg_inv_sqrt = np.power(deg, -0.5, where=deg > 0)
-        deg_inv_sqrt[~np.isfinite(deg_inv_sqrt)] = 0.0
-        d_inv_sqrt = sp.diags(deg_inv_sqrt)
-        return (d_inv_sqrt @ adj @ d_inv_sqrt).tocsr()
+        h0 = self.lin1(x)
+        h1 = torch.sparse.mm(S, h0)
+        h1 = F.relu(h1)
+        h1 = F.dropout(h1, p=self.dropout, training=self.training)
+        h2 = self.lin2(h1)
+        out = torch.sparse.mm(S, h2)
+        return F.log_softmax(out, dim=1)
 
     def forward_with_debug(self, data):
-        """
-        Compute logits and expose layer-wise matrices for explanation.
-        """
         x = data.x
         device = x.device
-        norm_adj = self._normalized_adjacency(data.edge_index, data.num_nodes)
-        
+        S_sp = self._get_S(data)
+        S = _scipy_to_torch_sparse(S_sp, device=device, dtype=x.dtype)
+
         def mem_mb(tensor):
-            return float((tensor.numel() * tensor.element_size()) / (1024 ** 2))
+            return float((tensor.numel() * tensor.element_size()) / (1024**2))
 
-        w0 = self.conv1.lin.weight.t()
-        b0 = self.conv1.bias if self.conv1.bias is not None else 0.0
-        pre_agg_1 = x @ w0
-        post_norm_1 = torch.tensor(
-            norm_adj @ pre_agg_1.detach().cpu().numpy(),
-            dtype=x.dtype,
-            device=device,
-        ) + b0
+        pre_agg_1 = x @ self.lin1.weight.t()
+        post_norm_1 = torch.sparse.mm(S, pre_agg_1) + self.lin1.bias
         post_act_1 = F.relu(post_norm_1)
-
-        w1 = self.conv2.lin.weight.t()
-        b1 = self.conv2.bias if self.conv2.bias is not None else 0.0
-        pre_agg_2 = post_act_1 @ w1
-        post_norm_2 = torch.tensor(
-            norm_adj @ pre_agg_2.detach().cpu().numpy(),
-            dtype=x.dtype,
-            device=device,
-        ) + b1
+        pre_agg_2 = post_act_1 @ self.lin2.weight.t()
+        post_norm_2 = torch.sparse.mm(S, pre_agg_2) + self.lin2.bias
         probs = torch.softmax(post_norm_2, dim=1)
         preds = probs.argmax(dim=1)
-        
+
         param_bytes = sum(p.numel() * p.element_size() for p in self.parameters())
         activation_memory = {
             "input_x_mb": mem_mb(x),
@@ -96,19 +100,17 @@ class GCN(torch.nn.Module):
             "softmax_probabilities": probs.detach(),
             "predictions": preds.detach(),
             "memory": {
-                "parameter_memory_mb": float(param_bytes / (1024 ** 2)),
+                "parameter_memory_mb": float(param_bytes / (1024**2)),
                 "activation_memory_mb": activation_memory,
-                "total_estimated_mb": float(param_bytes / (1024 ** 2)) + sum(activation_memory.values()),
+                "total_estimated_mb": float(param_bytes / (1024**2)) + sum(activation_memory.values()),
             },
         }
 
-    def get_embeddings(self, data, edge_weight=None):
-        """
-        Extract hidden layer embeddings H(1).
-        """
-        x, edge_index = data.x, data.edge_index
-        if edge_weight is None and hasattr(data, 'edge_weight'):
-            edge_weight = data.edge_weight
-            
-        x = self.conv1(x, edge_index, edge_weight)
-        return F.relu(x)
+    def get_embeddings(self, data):
+        x = data.x
+        S_sp = self._get_S(data)
+        S = _scipy_to_torch_sparse(S_sp, device=x.device, dtype=x.dtype)
+        h0 = self.lin1(x)
+        h1 = torch.sparse.mm(S, h0)
+        return F.relu(h1)
+

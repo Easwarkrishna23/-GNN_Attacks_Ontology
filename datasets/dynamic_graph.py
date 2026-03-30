@@ -1,8 +1,9 @@
 import torch
 import networkx as nx
 import numpy as np
-from torch_geometric.utils import from_networkx
-import torch_geometric.transforms as T
+import scipy.sparse as sp
+
+from datasets.simple_data import GraphData
 
 class DynamicGraphGenerator:
     """
@@ -54,14 +55,23 @@ class DynamicGraphGenerator:
 
     def get_pyg_data(self):
         """
-        Convert NetworkX graph to PyTorch Geometric data object.
+        Convert NetworkX graph to a lightweight GraphData object (PyG-like).
         """
-        data = from_networkx(self.G)
-        data.x = torch.tensor(self.features, dtype=torch.float)
-        data.y = torch.tensor(self.labels, dtype=torch.long)
+        n = self.G.number_of_nodes()
+        edges = np.array(list(self.G.edges()), dtype=np.int64)
+        if edges.size == 0:
+            edge_index = torch.zeros((2, 0), dtype=torch.long)
+        else:
+            # undirected: include both directions
+            src = np.concatenate([edges[:, 0], edges[:, 1]])
+            dst = np.concatenate([edges[:, 1], edges[:, 0]])
+            edge_index = torch.tensor(np.vstack([src, dst]), dtype=torch.long)
+
+        x = torch.tensor(self.features, dtype=torch.float32)
+        y = torch.tensor(self.labels, dtype=torch.long)
         
         # Add train/val/test masks
-        num_nodes = data.num_nodes
+        num_nodes = n
         indices = np.arange(num_nodes)
         np.random.shuffle(indices)
         
@@ -76,11 +86,7 @@ class DynamicGraphGenerator:
         val_mask[indices[train_size:train_size+val_size]] = True
         test_mask[indices[train_size+val_size:]] = True
         
-        data.train_mask = train_mask
-        data.val_mask = val_mask
-        data.test_mask = test_mask
-        
-        return data
+        return GraphData(x=x, y=y, edge_index=edge_index, train_mask=train_mask, val_mask=val_mask, test_mask=test_mask)
 
 if __name__ == "__main__":
     generator = DynamicGraphGenerator(initial_nodes=50)

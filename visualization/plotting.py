@@ -1,9 +1,10 @@
 import math
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import seaborn as sns
 import pandas as pd
 import numpy as np
-from sklearn.manifold import TSNE
 from sklearn.metrics import confusion_matrix
 
 def plot_robustness_curves(budgets, accuracies, attack_names, title="Robustness Curves"):
@@ -46,6 +47,7 @@ def plot_confusion_matrix(y_true, y_pred, class_names, save_path, title):
 
 
 def plot_tsne_embeddings(embeddings, labels, save_path, title):
+    from sklearn.manifold import TSNE
     emb = np.asarray(embeddings)
     y = np.asarray(labels)
     tsne = TSNE(n_components=2, random_state=42, init="pca", learning_rate="auto")
@@ -97,6 +99,60 @@ def plot_layer_output_panel(layers, titles, save_path, max_nodes=60, max_feature
     plt.tight_layout()
     plt.savefig(save_path)
     plt.close()
+
+
+def plot_tsne_suite(embeddings_list, labels, titles, save_path, seed=42, sample_size=1500, perplexity=30):
+    """
+    Paper-style class cluster visualization:
+    - Uses a stable 2D projection on stacked embeddings for consistent coordinate space.
+    - Default implementation uses PCA (deterministic, avoids t-SNE instability/abort on some macOS builds).
+    - Renders as a grid of panels with identical coloring for classes.
+    """
+    if len(embeddings_list) != len(titles):
+        raise ValueError("embeddings_list and titles must have same length")
+
+    embs0 = np.asarray(embeddings_list[0])
+    n = embs0.shape[0]
+    rng = np.random.default_rng(seed)
+    sample_idx = rng.choice(n, size=min(sample_size, n), replace=False)
+
+    embs = [np.asarray(e)[sample_idx] for e in embeddings_list]
+    y = np.asarray(labels)[sample_idx]
+    stacked = np.vstack(embs)
+    # Deterministic PCA via SVD (no sklearn dependency, avoids platform-specific aborts).
+    X = stacked.astype(np.float64, copy=False)
+    X = X - X.mean(axis=0, keepdims=True)
+    try:
+        U, S, _ = np.linalg.svd(X, full_matrices=False)
+        coords = U[:, :2] * S[:2]
+    except Exception:
+        # Last-resort fallback to t-SNE if SVD fails.
+        from sklearn.manifold import TSNE
+        tsne = TSNE(n_components=2, random_state=seed, init="pca", learning_rate="auto", perplexity=perplexity)
+        coords = tsne.fit_transform(stacked)
+    split = np.array_split(coords, len(embs), axis=0)
+
+    k = len(embs)
+    cols = 4 if k > 4 else k
+    rows = int(math.ceil(k / cols))
+    fig, axes = plt.subplots(rows, cols, figsize=(5.5 * cols, 4.6 * rows))
+    axes = np.array(axes).reshape(-1)
+
+    for i in range(rows * cols):
+        ax = axes[i]
+        if i >= k:
+            ax.axis("off")
+            continue
+        ax.scatter(split[i][:, 0], split[i][:, 1], c=y, s=8, cmap="tab10", alpha=0.85, linewidths=0)
+        ax.set_title(titles[i], fontsize=10)
+        ax.set_xticks([])
+        ax.set_yticks([])
+
+    fig.suptitle("Class Clusters (2D projection of hidden embeddings): clean vs attacked vs defended", y=0.98, fontsize=12)
+    plt.tight_layout(rect=[0, 0, 1, 0.96])
+    plt.savefig(save_path, dpi=200)
+    plt.close(fig)
+    return save_path
 
 if __name__ == "__main__":
     pass
