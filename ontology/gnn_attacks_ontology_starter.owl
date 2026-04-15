@@ -1,0 +1,158 @@
+<?xml version="1.0"?>
+<rdf:RDF
+    xmlns="http://www.semanticweb.org/easwar/gnn-attacks-ontology#"
+    xml:base="http://www.semanticweb.org/easwar/gnn-attacks-ontology"
+    xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#"
+    xmlns:owl="http://www.w3.org/2002/07/owl#"
+    xmlns:xml="http://www.w3.org/XML/1998/namespace"
+    xmlns:xsd="http://www.w3.org/2001/XMLSchema#"
+    xmlns:rdfs="http://www.w3.org/2000/01/rdf-schema#">
+
+    <owl:Ontology rdf:about="http://www.semanticweb.org/easwar/gnn-attacks-ontology">
+        <rdfs:comment>Starter ontology for GNN adversarial attacks, defenses, datasets, and impact analysis.</rdfs:comment>
+    </owl:Ontology>
+
+    <!-- ===================== -->
+    <!-- Core Classes          -->
+    <!-- ===================== -->
+    <owl:Class rdf:about="#Attack"/>
+    <owl:Class rdf:about="#Defense"/>
+    <owl:Class rdf:about="#Dataset"/>
+    <owl:Class rdf:about="#Model"/>
+    <owl:Class rdf:about="#ImpactMetric"/>
+    <owl:Class rdf:about="#Perturbation"/>
+    <owl:Class rdf:about="#OntologyRule"/>
+
+    <!-- Attack subclasses -->
+    <owl:Class rdf:about="#EvasionAttack">
+        <rdfs:subClassOf rdf:resource="#Attack"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#PoisoningAttack">
+        <rdfs:subClassOf rdf:resource="#Attack"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#BackdoorAttack">
+        <rdfs:subClassOf rdf:resource="#Attack"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#StructuralAttack">
+        <rdfs:subClassOf rdf:resource="#Attack"/>
+    </owl:Class>
+
+    <!-- Defense subclasses -->
+    <owl:Class rdf:about="#EdgeFilteringDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#AdversarialTrainingDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#GraphPurificationDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#SemanticRuleDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+
+    <!-- Metric subclasses -->
+    <owl:Class rdf:about="#AccuracyMetric">
+        <rdfs:subClassOf rdf:resource="#ImpactMetric"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#F1ScoreMetric">
+        <rdfs:subClassOf rdf:resource="#ImpactMetric"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#AttackSuccessRate">
+        <rdfs:subClassOf rdf:resource="#ImpactMetric"/>
+    </owl:Class>
+
+    <owl:Class rdf:about="#ModularityMetric">
+        <rdfs:subClassOf rdf:resource="#ImpactMetric"/>
+    </owl:Class>
+
+    <!-- ===================== -->
+    <!-- Object Properties     -->
+    <!-- ===================== -->
+    <owl:ObjectProperty rdf:about="#targetsDataset">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="#Dataset"/>
+    </owl:ObjectProperty>
+
+    <owl:ObjectProperty rdf:about="#affectsModel">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="#Model"/>
+    </owl:ObjectProperty>
+
+    <owl:ObjectProperty rdf:about="#mitigatedBy">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="#Defense"/>
+    </owl:ObjectProperty>
+
+    <owl:ObjectProperty rdf:about="#measuredBy">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="#ImpactMetric"/>
+    </owl:ObjectProperty>
+
+    <owl:ObjectProperty rdf:about="#usesRule">
+        <rdfs:domain rdf:resource="#Defense"/>
+        <rdfs:range rdf:resource="#OntologyRule"/>
+    </owl:ObjectProperty>
+
+    <!-- ===================== -->
+    <!-- Data Properties       -->
+    <!-- ===================== -->
+    <owl:DatatypeProperty rdf:about="#hasSeverityScore">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+
+    <owl:DatatypeProperty rdf:about="#accuracyBefore">
+        <rdfs:domain rdf:resource="#ImpactMetric"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+
+    <owl:DatatypeProperty rdf:about="#accuracyAfterAttack">
+        <rdfs:domain rdf:resource="#ImpactMetric"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+
+    <owl:DatatypeProperty rdf:about="#accuracyAfterDefense">
+        <rdfs:domain rdf:resource="#ImpactMetric"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+
+    <!-- ===================== -->
+    <!-- Individuals           -->
+    <!-- ===================== -->
+    <owl:NamedIndividual rdf:about="#CoraDataset">
+        <rdf:type rdf:resource="#Dataset"/>
+    </owl:NamedIndividual>
+
+    <owl:NamedIndividual rdf:about="#GCNModel">
+        <rdf:type rdf:resource="#Model"/>
+    </owl:NamedIndividual>
+
+    <owl:NamedIndividual rdf:about="#MetaPoisonAttack">
+        <rdf:type rdf:resource="#PoisoningAttack"/>
+        <targetsDataset rdf:resource="#CoraDataset"/>
+        <affectsModel rdf:resource="#GCNModel"/>
+        <mitigatedBy rdf:resource="#JaccardEdgeFilter"/>
+        <hasSeverityScore rdf:datatype="http://www.w3.org/2001/XMLSchema#float">0.91</hasSeverityScore>
+    </owl:NamedIndividual>
+
+    <owl:NamedIndividual rdf:about="#JaccardEdgeFilter">
+        <rdf:type rdf:resource="#EdgeFilteringDefense"/>
+    </owl:NamedIndividual>
+
+    <owl:NamedIndividual rdf:about="#ImpactRun1">
+        <rdf:type rdf:resource="#AccuracyMetric"/>
+        <accuracyBefore rdf:datatype="http://www.w3.org/2001/XMLSchema#float">0.86</accuracyBefore>
+        <accuracyAfterAttack rdf:datatype="http://www.w3.org/2001/XMLSchema#float">0.54</accuracyAfterAttack>
+        <accuracyAfterDefense rdf:datatype="http://www.w3.org/2001/XMLSchema#float">0.79</accuracyAfterDefense>
+    </owl:NamedIndividual>
+
+</rdf:RDF>

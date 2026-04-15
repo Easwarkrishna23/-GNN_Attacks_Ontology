@@ -1,13 +1,13 @@
 \begin{table}[t]
 \centering
 \small
-\begin{tabular}{llll}
+\begin{tabular}{llllrrr}
 \toprule
-Graph & Density & Modularity & Conductance \\
+Graph & Density & Modularity & Conductance & Homophily & AvgDegree & NumEdges \\
 \midrule
-Clean & 0.001 & 0.640 & 0.201 \\
-Attacked (Evasion: Gradient (FGSM-like)) & 0.001 & 0.640 & 0.201 \\
-Defended (Defense: Ontology + Retrain) & 0.001 & 0.640 & 0.201 \\
+Clean & 0.001 & 0.640 & 0.201 & 0.809966 & 3.898080 & 5278.000000 \\
+Attacked & 0.001 & 0.640 & 0.201 & 0.809966 & 3.898080 & 5278.000000 \\
+Defended & 0.002 & 0.703 & 0.133 & 0.875235 & 5.889956 & 7975.000000 \\
 \bottomrule
 \end{tabular}
 

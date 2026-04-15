@@ -3,6 +3,7 @@ import scipy.sparse as sp
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from typing import Optional
 
 
 def _scipy_to_torch_sparse(mat: sp.csr_matrix, device=None, dtype=torch.float32):
@@ -12,13 +13,18 @@ def _scipy_to_torch_sparse(mat: sp.csr_matrix, device=None, dtype=torch.float32)
     return torch.sparse_coo_tensor(idx, val, size=mat.shape, device=device, dtype=dtype).coalesce()
 
 
-def normalized_adjacency(edge_index: torch.Tensor, num_nodes: int) -> sp.csr_matrix:
+def normalized_adjacency(edge_index: torch.Tensor, num_nodes: int, edge_weight: Optional[torch.Tensor] = None) -> sp.csr_matrix:
     row = edge_index[0].cpu().numpy()
     col = edge_index[1].cpu().numpy()
-    val = np.ones(edge_index.size(1), dtype=np.float32)
+    if edge_weight is None:
+        val = np.ones(edge_index.size(1), dtype=np.float32)
+    else:
+        val = edge_weight.detach().cpu().numpy().astype(np.float32)
     adj = sp.coo_matrix((val, (row, col)), shape=(num_nodes, num_nodes), dtype=np.float32)
     adj = adj.tocsr()
+    # Symmetrize: use max to preserve higher trust weights when one direction is missing.
     adj = adj.maximum(adj.T)
+    # Always add self-loops with weight=1.
     adj = adj + sp.eye(num_nodes, dtype=np.float32, format="csr")
     deg = np.array(adj.sum(axis=1)).flatten()
     deg_inv_sqrt = np.power(deg, -0.5, where=deg > 0)
@@ -44,8 +50,12 @@ class GCN(nn.Module):
             data._S_sp = None
             data._S_edge_hash = None
         edge_hash = int(torch.sum(data.edge_index).item()) + int(data.edge_index.numel())
+        if getattr(data, "edge_weight", None) is not None:
+            # Include a cheap weight hash to invalidate cache when weights change.
+            ew = data.edge_weight
+            edge_hash += int(torch.sum(ew).item() * 1000) + int(ew.numel())
         if data._S_sp is None or data._S_edge_hash != edge_hash:
-            S = normalized_adjacency(data.edge_index, data.num_nodes)
+            S = normalized_adjacency(data.edge_index, data.num_nodes, edge_weight=getattr(data, "edge_weight", None))
             data._S_sp = S
             data._S_edge_hash = edge_hash
         return data._S_sp
@@ -113,4 +123,3 @@ class GCN(nn.Module):
         h0 = self.lin1(x)
         h1 = torch.sparse.mm(S, h0)
         return F.relu(h1)
-

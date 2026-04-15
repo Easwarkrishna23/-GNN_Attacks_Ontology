@@ -14,6 +14,10 @@ def visualize_graph_mosaic(
     target_node=None,
     attacked_nodes=None,
     defended_nodes=None,
+    attacked_pred_changed=None,
+    defended_pred_changed=None,
+    attacked_newly_wrong=None,
+    defended_still_wrong=None,
     attack_name=None,
     defense_name=None,
     hop_k=2,
@@ -27,6 +31,11 @@ def visualize_graph_mosaic(
       - Attack-removed edges: dashed black
       - Defense-added edges: green
       - Defense-removed edges: dashed blue
+
+    Additionally, we can ring nodes to show:
+      - Feature-touched nodes (attacked_nodes/defended_nodes): red/green ring
+      - Prediction-changed nodes: purple ring
+      - Newly misclassified nodes under attack: black ring (optional)
     """
     if target_node is None:
         target_node = 0
@@ -110,6 +119,32 @@ def visualize_graph_mosaic(
                 linewidths=2.2,
                 node_size=240,
             )
+    if attacked_pred_changed:
+        ring = [n for n in attacked_pred_changed if n in nodes]
+        if ring:
+            nx.draw_networkx_nodes(
+                sub_clean,
+                pos,
+                ax=axes[1],
+                nodelist=ring,
+                node_color="none",
+                edgecolors="#8e44ad",
+                linewidths=2.2,
+                node_size=310,
+            )
+    if attacked_newly_wrong:
+        ring = [n for n in attacked_newly_wrong if n in nodes]
+        if ring:
+            nx.draw_networkx_nodes(
+                sub_clean,
+                pos,
+                ax=axes[1],
+                nodelist=ring,
+                node_color="none",
+                edgecolors="black",
+                linewidths=2.2,
+                node_size=380,
+            )
 
     # Panel 3: Defended
     nx.draw(sub_clean, pos, ax=axes[2], node_color=labels[list(sub_clean.nodes())],
@@ -133,6 +168,32 @@ def visualize_graph_mosaic(
                 linewidths=2.2,
                 node_size=240,
             )
+    if defended_pred_changed:
+        ring = [n for n in defended_pred_changed if n in nodes]
+        if ring:
+            nx.draw_networkx_nodes(
+                sub_clean,
+                pos,
+                ax=axes[2],
+                nodelist=ring,
+                node_color="none",
+                edgecolors="#8e44ad",
+                linewidths=2.2,
+                node_size=310,
+            )
+    if defended_still_wrong:
+        ring = [n for n in defended_still_wrong if n in nodes]
+        if ring:
+            nx.draw_networkx_nodes(
+                sub_clean,
+                pos,
+                ax=axes[2],
+                nodelist=ring,
+                node_color="none",
+                edgecolors="black",
+                linewidths=2.2,
+                node_size=380,
+            )
 
     # Highlight target node
     for ax in axes:
@@ -150,8 +211,12 @@ def visualize_graph_mosaic(
         Line2D([0], [0], color="black", lw=2, linestyle="--", label="Attack removed edges"),
         Line2D([0], [0], color="green", lw=2, label="Defense added edges"),
         Line2D([0], [0], color="blue", lw=2, linestyle="--", label="Defense removed edges"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="none", markeredgecolor="red", markersize=9, label="Feature changed (attack)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="none", markeredgecolor="green", markersize=9, label="Feature repaired/changed (defense)"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="none", markeredgecolor="#8e44ad", markersize=9, label="Prediction changed"),
+        Line2D([0], [0], marker="o", color="w", markerfacecolor="none", markeredgecolor="black", markersize=9, label="Misclassified"),
     ]
-    fig.legend(handles=legend_elems, loc="lower center", ncol=3, frameon=False, fontsize=10)
+    fig.legend(handles=legend_elems, loc="lower center", ncol=4, frameon=False, fontsize=9)
     fig.suptitle(
         f"Edge diffs: attack +{len(attack_added)} / -{len(attack_removed)} | defense +{len(defense_added)} / -{len(defense_removed)}",
         y=0.98,
@@ -162,6 +227,143 @@ def visualize_graph_mosaic(
     plt.savefig(save_path)
     plt.close()
     return save_path
+
+
+def visualize_triplet_separate(
+    clean_adj,
+    attacked_adj,
+    defended_adj,
+    labels,
+    target_node,
+    attacked_nodes=None,
+    defended_nodes=None,
+    attacked_pred_changed=None,
+    defended_pred_changed=None,
+    attacked_newly_wrong=None,
+    defended_still_wrong=None,
+    attack_name=None,
+    defense_name=None,
+    hop_k=2,
+    max_nodes=260,
+    out_dir="results",
+    prefix="worst",
+):
+    """
+    Save 3 separate images (clean / attacked / defended) using the SAME node positions.
+    This is helpful for reports where you want independent panels but perfect alignment.
+    """
+    import os
+
+    if target_node is None:
+        target_node = 0
+
+    def to_graph(adj):
+        if sp.issparse(adj):
+            return nx.from_scipy_sparse_array(adj) if hasattr(nx, 'from_scipy_sparse_array') else nx.from_scipy_sparse_matrix(adj)
+        return nx.from_numpy_array(adj)
+
+    def edge_set(G):
+        return set((min(u, v), max(u, v)) for u, v in G.edges())
+
+    def khop_nodes(G, start, k, cap):
+        visited = {start}
+        frontier = {start}
+        for _ in range(k):
+            nxt = set()
+            for u in frontier:
+                nxt.update(G.neighbors(u))
+            nxt -= visited
+            visited |= nxt
+            frontier = nxt
+            if len(visited) >= cap:
+                break
+        if len(visited) > cap:
+            visited = set(list(visited)[:cap])
+        return visited
+
+    G_clean = to_graph(clean_adj)
+    G_att = to_graph(attacked_adj)
+    G_def = to_graph(defended_adj)
+
+    clean_edges = edge_set(G_clean)
+    att_edges = edge_set(G_att)
+    def_edges = edge_set(G_def)
+
+    attack_added = att_edges - clean_edges
+    attack_removed = clean_edges - att_edges
+    defense_added = def_edges - att_edges
+    defense_removed = att_edges - def_edges
+
+    nodes = set(khop_nodes(G_clean, target_node, hop_k, max_nodes))
+    for u, v in attack_added.union(attack_removed, defense_added, defense_removed):
+        nodes.add(u)
+        nodes.add(v)
+    if len(nodes) > max_nodes:
+        nodes = set(list(nodes)[:max_nodes])
+
+    sub = G_clean.subgraph(nodes)
+    pos = nx.spring_layout(sub, seed=42)
+
+    os.makedirs(out_dir, exist_ok=True)
+    paths = {}
+
+    def _draw_panel(title, edge_color, add_edges=None, rm_edges=None, ring_red=None, ring_green=None, ring_purple=None, ring_black=None, path=""):
+        plt.figure(figsize=(8, 6))
+        nx.draw(sub, pos, node_color=labels[list(sub.nodes())], node_size=120, cmap=plt.cm.Set1, with_labels=False, edge_color=edge_color, alpha=0.7)
+        if add_edges:
+            nx.draw_networkx_edges(sub, pos, edgelist=[e for e in add_edges if e[0] in nodes and e[1] in nodes], edge_color="red", width=2.0)
+        if rm_edges:
+            nx.draw_networkx_edges(sub, pos, edgelist=[e for e in rm_edges if e[0] in nodes and e[1] in nodes], edge_color="black", style="dashed", width=1.5)
+        if ring_red:
+            ring = [n for n in ring_red if n in nodes]
+            if ring:
+                nx.draw_networkx_nodes(sub, pos, nodelist=ring, node_color="none", edgecolors="red", linewidths=2.2, node_size=240)
+        if ring_green:
+            ring = [n for n in ring_green if n in nodes]
+            if ring:
+                nx.draw_networkx_nodes(sub, pos, nodelist=ring, node_color="none", edgecolors="green", linewidths=2.2, node_size=240)
+        if ring_purple:
+            ring = [n for n in ring_purple if n in nodes]
+            if ring:
+                nx.draw_networkx_nodes(sub, pos, nodelist=ring, node_color="none", edgecolors="#8e44ad", linewidths=2.2, node_size=310)
+        if ring_black:
+            ring = [n for n in ring_black if n in nodes]
+            if ring:
+                nx.draw_networkx_nodes(sub, pos, nodelist=ring, node_color="none", edgecolors="black", linewidths=2.2, node_size=380)
+        if target_node in nodes:
+            nx.draw_networkx_nodes(sub, pos, nodelist=[target_node], node_color="yellow", node_size=240, edgecolors="black")
+        plt.title(title)
+        plt.tight_layout()
+        plt.savefig(path, dpi=220)
+        plt.close()
+
+    paths["clean"] = os.path.join(out_dir, f"FIG_{prefix}_clean.png")
+    _draw_panel("Clean Dataset (Subgraph)", "gray", path=paths["clean"])
+
+    paths["attacked"] = os.path.join(out_dir, f"FIG_{prefix}_attacked.png")
+    _draw_panel(
+        f"Attacked Dataset ({attack_name})" if attack_name else "Attacked Dataset",
+        "lightgray",
+        add_edges=attack_added,
+        rm_edges=attack_removed,
+        ring_red=attacked_nodes,
+        ring_purple=attacked_pred_changed,
+        ring_black=attacked_newly_wrong,
+        path=paths["attacked"],
+    )
+
+    paths["defended"] = os.path.join(out_dir, f"FIG_{prefix}_defended.png")
+    _draw_panel(
+        f"Defended Dataset ({defense_name})" if defense_name else "Defended Dataset",
+        "lightgray",
+        add_edges=defense_added,
+        rm_edges=defense_removed,
+        ring_green=defended_nodes,
+        ring_purple=defended_pred_changed,
+        ring_black=defended_still_wrong,
+        path=paths["defended"],
+    )
+    return paths
 
 
 def visualize_graph_pair(

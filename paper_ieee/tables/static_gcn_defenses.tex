@@ -1,17 +1,19 @@
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{lllllll}
+\begin{tabular}{lllll}
 \toprule
-Attack & Accuracy & F1 & ROC-AUC & Log-loss & Classification Margin & Perturbation Budget \\
+Attack & Accuracy & Macro F1 & ROC-AUC & Perturbation Budget \\
 \midrule
-Baseline & 0.802 & 0.792 & 0.961 & 0.942 & 0.309 & 0.000 \\
-Evasion: Gradient (FGSM-like) & 0.004 & 0.002 & 0.053 & 15.735 & 0.896 & 0.080 \\
-Defense: Feature Smoothing + Retrain & 0.895 & 0.905 & 0.992 & 0.331 & 0.801 & 0.700 \\
-Defense: Ontology + Retrain & 0.937 & 0.933 & 0.993 & 0.298 & 0.745 & 0.300 \\
+Baseline & 0.821 & 0.807 & 0.970 & 0.000 \\
+Evasion: Gradient (FGSM-like) & 0.003 & 0.002 & 0.046 & 0.100 \\
+Defense: Smoothing (alpha=0.3) & 0.004 & 0.003 & 0.054 & 0.700 \\
+Defense: Pruning (top-k=10) & 0.002 & 0.002 & 0.036 & 0.500 \\
+Defense: Ontology: Full + Retrain & 0.852 & 0.861 & 0.986 & 0.300 \\
+Defense: Full Ontology + Pruning (k=15) + Retrain & 0.895 & 0.902 & 0.990 & 0.500 \\
 \bottomrule
 \end{tabular}
 
-\caption{Static (Cora) post-attack defenses for GCN on the strongest gradient-based feature attack.}
+\caption{Static (Planetoid) post-attack defenses for GCN on the most impactful attack.}
 \label{tab:static_gcn_defenses}
 \end{table*}

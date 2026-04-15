@@ -1,14 +1,19 @@
-\documentclass[journal]{IEEEtran}
+\documentclass[conference]{IEEEtran}
+\IEEEoverridecommandlockouts
 
 \usepackage[T1]{fontenc}
 \usepackage{graphicx}
 \usepackage{amsmath,amssymb}
 \usepackage{booktabs}
 \usepackage{tabularx}
+\usepackage{multirow}
+\usepackage{cite}
 \usepackage{url}
 \usepackage[hidelinks]{hyperref}
 \usepackage{algorithm}
 \usepackage{algorithmic}
+\usepackage{tikz}
+\usetikzlibrary{arrows.meta,positioning,shapes.geometric,calc,fit}
 
 % Make the document build in Overleaf (paper_ieee/ only) and in-repo.
 \graphicspath{{figures/}{../results/}{results/}}
@@ -21,16 +26,21 @@
   }%
 }
 
-\title{Adversarial Attacks and Ontology-Guided Defense for Robust Node Classification with Graph Neural Networks}
+\title{Adversarial Attacks on GCN and GAT for Node Classification\\and Ontology-Guided Defenses}
 
-\author{EaswarKrishna~A~P%
-\thanks{M.Tech (Network Engineering). This report documents the implementation and evaluation artifacts included in the project repository.}}
+\author{
+\IEEEauthorblockN{EaswarKrishna A P}
+\IEEEauthorblockA{
+Department of Network Engineering\\
+India\\
+email: (omitted for anonymized draft)
+}}
 
 \begin{document}
 \maketitle
 
 \begin{abstract}
-Graph Neural Networks (GNNs) have become a standard tool for learning from relational data, yet even small and localized perturbations to graph structure or node attributes can cause large drops in node classification performance. This report presents an end-to-end experimental study of adversarial attacks on two widely used architectures---Graph Convolutional Networks (GCN) and Graph Attention Networks (GAT)---and evaluates defense mechanisms that improve robustness without sacrificing accuracy on clean graphs. We benchmark three poisoning attacks (random structure corruption, Nettack, and a meta-learning based attack) and three evasion attacks (edge flips, feature perturbations, and a gradient-based feature attack). Beyond standard defenses such as Laplacian feature smoothing, we propose an ontology-guided defense that uses semantic consistency between node features and class labels to reweight message passing and project features onto a more stable subspace. Experiments on the static Cora citation graph and a dynamic graph generator demonstrate that gradient-based feature manipulation is the most damaging evasion strategy in our setting, while the ontology-guided defense recovers a substantial portion of lost performance. We also provide layer-wise output visualizations, graph-before/after mosaics, and comprehensive metric tables to support interpretability of the attack impact.
+Graph Neural Networks (GNNs) achieve strong results on node classification by repeatedly aggregating information from graph neighborhoods. However, this same message-passing mechanism creates an amplified attack surface: small perturbations to edges or node features can propagate across layers and significantly degrade predictions. This paper presents a complete experimental framework to study adversarial attacks on two canonical architectures, the two-layer Graph Convolutional Network (GCN) and Graph Attention Network (GAT), on both a static benchmark (Cora) and a dynamic evolving-graph generator. We implement three poisoning attacks (random structure corruption, Nettack, and a meta-learning style poisoning attack) and three evasion attacks (degree-preserving edge flips, feature-space evasion, and a gradient-based FGSM-like feature attack). We then evaluate filtering and smoothing defenses (feature smoothing and similarity-based edge pruning) and propose an ontology-guided defense that constructs a semantic similarity matrix from feature-label affinity and feature co-occurrence to reweight aggregation and project features toward consistent subspaces. Across our runs, gradient-aligned feature evasion is the most damaging attack, while the combined pruning+ontology defense recovers a substantial portion of lost accuracy and macro-F1. The project is fully reproducible and outputs metric tables and diagnostic figures.
 \end{abstract}
 
 \begin{IEEEkeywords}
@@ -38,164 +48,231 @@ Graph Neural Networks, adversarial machine learning, node classification, poison
 \end{IEEEkeywords}
 
 \section{Introduction}
-Graph Neural Networks (GNNs) extend deep learning to non-Euclidean data by learning representations that explicitly depend on graph connectivity and neighborhood context. In practical deployments, however, the very mechanism that makes GNNs effective---message passing across edges---also creates an amplified attack surface: manipulating a small number of edges or a small fraction of feature entries can alter aggregated messages across multiple layers and degrade predictions far from the perturbation location. This is especially problematic in high-stakes settings where graphs are built from user-generated content, logs, transactions, or scraped data, and where the data pipeline can be influenced by adversaries.
+Graph Neural Networks (GNNs) extend deep learning to relational data by learning representations that depend on graph connectivity and neighborhood context. In node classification, this message passing mechanism aggregates information from neighboring nodes and progressively refines embeddings. Yet message passing also creates a failure mode: if an adversary slightly modifies the graph or node attributes, these perturbations can be amplified across layers and lead to large drops in downstream performance.
 
-This project focuses on node classification under adversarial manipulation. We pursue three goals. First, we implement and evaluate common GNN architectures (GCN~\cite{kipf2017gcn} and GAT~\cite{velickovic2018gat}) on a standard benchmark (Cora). Second, we compare attacks that occur during training (poisoning) to attacks that occur at inference time (evasion), spanning both structural and feature-based perturbations. Third, we design and test defenses, including a novel ontology-guided strategy that enforces semantic consistency between nodes and their neighborhoods.
+This paper documents a production-grade experimental framework that implements (i) two-layer GCN and GAT models~\cite{kipf2017gcn,velickovic2018gat}, (ii) representative poisoning and evasion attacks~\cite{zugner2018nettack,zugner2019metattack,goodfellow2015fgsm}, (iii) base-paper-inspired defenses such as similarity-based pruning and feature smoothing~\cite{wu2019jaccard,zhang2020gnnguard}, and (iv) an ontology-guided defense that enforces semantic consistency for robust message passing. The paper is aligned with the robustness literature: it defines a threat model, reports multiple metrics (accuracy/F1/ROC-AUC, ASR, margin drop, log-loss), and includes qualitative diagnostics (confusion matrices, embeddings, and layer-wise outputs).
 
-The report is written in the style of a modern robustness paper: formal problem definition, explicit threat model, careful metric reporting, and evidence from both quantitative and qualitative diagnostics (confusion matrices, embedding plots, and layer-wise output inspections). While inspired by the broader literature on defending GNNs under graph perturbations~\cite{zhang2020gnnguard,wu2019jaccard,entezari2020svd}, all exposition and experimental discussion are original and tailored to the code and artifacts produced in this repository.
+\textbf{Contributions.} We make four practical contributions:
+\begin{itemize}
+\item An end-to-end system (training, attacks, defenses, evaluation, visualization) with reproducible seeds and on-disk artifacts.
+\item Implementations of six attacks spanning poisoning and evasion, with budgets enforced at the operator level.
+\item A defense stack evaluated in three modes (pruning-only, ontology-only, pruning+ontology) against the most impactful attack (largest accuracy drop).
+\item A research-paper-ready reporting pipeline: terminal tables, CSV tables, and publishable figures for interpretability.
+\end{itemize}
+
+\begin{figure*}[t]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners, align=center, minimum height=9mm, minimum width=28mm},
+  big/.style={draw, rounded corners, align=center, minimum height=11mm, minimum width=40mm},
+  arrow/.style={-Latex, thick}
+]
+\node[big] (data) {Graph Dataset\\$(\mathbf{A},\mathbf{X},\mathbf{y})$\\Static: Cora\\Dynamic: snapshots};
+\node[box, right=9mm of data] (split) {Split\\Train/Val/Test};
+\node[big, right=9mm of split] (model) {GNN Model\\GCN or GAT\\2 layers};
+\node[big, right=9mm of model] (eval) {Evaluation\\Acc/F1/ROC-AUC\\ASR, Margin, Log-loss};
+\node[big, right=9mm of eval] (art) {Artifacts\\CSV tables\\Figures (PNG)};
+
+\node[big, below=11mm of model] (attack) {Attack Module\\Poisoning / Evasion\\Budget $\Delta$};
+\node[big, below=11mm of eval] (def) {Defense Module\\Pruning\\Ontology\\Combined};
+
+\draw[arrow] (data) -- (split);
+\draw[arrow] (split) -- (model);
+\draw[arrow] (model) -- (eval);
+\draw[arrow] (eval) -- (art);
+\draw[arrow] (model) -- (attack);
+\draw[arrow] (attack) -- (def);
+\draw[arrow] (def.north) -- ++(0,6mm) -| (model.east);
+\end{tikzpicture}
+}%
+\caption{End-to-end workflow. Attacks either modify training-time data (poisoning) or inference-time inputs (evasion). Defenses are evaluated individually (pruning-only, ontology-only) and in combination (pruning+ontology) against the most impactful attack.}
+\label{fig:workflow}
+\end{figure*}
 
 \section{Related Work}
-Adversarial machine learning has historically focused on continuous domains such as images and audio, where perturbations are often bounded in an $\ell_p$ norm. Graphs introduce different challenges: the structure is discrete, edges are sparse, and perturbations can have cascading effects through message passing. Nettack~\cite{zugner2018nettack} and related methods explicitly search for edge and feature modifications that lead to misclassification, while meta-learning based approaches~\cite{zugner2019metattack} optimize perturbations through bilevel objectives that reflect training dynamics.
+Adversarial machine learning in continuous domains has a large body of work on $\ell_p$-bounded perturbations. Graphs introduce additional complexity due to discrete structure and non-i.i.d. dependencies. Graph adversarial attacks can be categorized into \textit{poisoning} (training-time) and \textit{evasion} (test-time) attacks~\cite{zugner2018nettack,zugner2019metattack}. Nettack~\cite{zugner2018nettack} selects edge and feature modifications that reduce the target margin while maintaining plausibility. Meta-learning based poisoning attacks~\cite{zugner2019metattack} treat perturbations as parameters optimized through training dynamics.
 
-Defenses for graph models often fall into two categories. Pre-processing defenses attempt to remove suspicious edges (e.g., similarity-based pruning) before training or inference~\cite{wu2019jaccard}. Model-based defenses modify the architecture or training objective to reduce sensitivity to perturbations, such as robust latent representations or low-rank filtering of adjacency~\cite{entezari2020svd}. GNNGuard~\cite{zhang2020gnnguard} illustrates a hybrid direction: use feature similarity to estimate neighbor importance and suppress messages that appear inconsistent with graph semantics. Our ontology-guided defense follows the same high-level intuition---messages should align with semantic similarity---but is implemented as an explicit semantic matrix that reweights propagation and projects features toward a stable manifold.
-
-\section{Background}
-\subsection{Graphs and Node Classification}
-Let $\mathcal{G}=(\mathcal{V},\mathcal{E},\mathbf{X})$ be a graph with $n=|\mathcal{V}|$ nodes, edges $\mathcal{E}$, and a node-feature matrix $\mathbf{X}\in\mathbb{R}^{n\times d}$. In node classification, each node $v\in\mathcal{V}$ is associated with a label $y_v\in\{1,\dots,C\}$. A model $f_\theta(\mathcal{G})$ produces class probabilities $\mathbf{p}_v$ per node, and training typically minimizes cross-entropy loss over a labeled subset.
-
-\subsection{Graph Convolutional Networks (GCN)}
-GCN~\cite{kipf2017gcn} performs message passing through a normalized adjacency matrix. With $\tilde{\mathbf{A}}=\mathbf{A}+\mathbf{I}$ and $\tilde{\mathbf{D}}_{ii}=\sum_j\tilde{\mathbf{A}}_{ij}$, one layer can be written as:
-\begin{equation}
-\mathbf{H}^{(\ell+1)} = \sigma\left(\tilde{\mathbf{D}}^{-\frac{1}{2}}\tilde{\mathbf{A}}\tilde{\mathbf{D}}^{-\frac{1}{2}}\mathbf{H}^{(\ell)}\mathbf{W}^{(\ell)}\right),
-\end{equation}
-where $\mathbf{H}^{(0)}=\mathbf{X}$, $\sigma(\cdot)$ is a nonlinearity, and $\mathbf{W}^{(\ell)}$ are trainable weights. In our implementation, we use a standard two-layer GCN with ReLU and dropout.
-
-\subsection{Graph Attention Networks (GAT)}
-GAT~\cite{velickovic2018gat} replaces fixed normalization with learned attention weights. For node $i$ and neighbor $j$, attention coefficients take the form:
-\begin{equation}
-\alpha_{ij} = \mathrm{softmax}_j\left(\mathrm{LeakyReLU}(\mathbf{a}^\top [\mathbf{W}\mathbf{h}_i\,\Vert\,\mathbf{W}\mathbf{h}_j])\right),
-\end{equation}
-and the message passing aggregates neighbors using these coefficients (often with multi-head attention). This adaptivity can improve accuracy but may also create new pathways for adversarial influence if attention weights can be steered by perturbations.
-
-\section{Threat Model and Problem Formulation}
-We consider two adversary capabilities.
-\textit{Poisoning attacks} modify training data---edges and/or features---before model training. The attacker aims to lower final test-time accuracy, either broadly (non-targeted) or on specific target nodes (targeted). Poisoning is realistic when graphs are collected over time and adversaries can inject interactions or falsify link evidence.
-\textit{Evasion attacks} modify the input presented at inference time while the trained model remains fixed. These attacks capture scenarios where the attacker can edit a user profile, manipulate a document feature vector, or flip a small number of connections at prediction time.
-
-The attacker is budget-limited. We report budgets in a way that matches the implementation: number of edge perturbations, binary flips per node for feature attacks, and $\epsilon$ for gradient-based feature manipulation. The defender is assumed to have access to training labels and can deploy defenses at training time (robust training or pre-processing) and/or inference time (feature denoising, reweighted message passing).
+Defenses are commonly split into preprocessing and model-based methods. Similarity-based edge filtering and feature smoothing reduce the impact of suspicious edges/features~\cite{wu2019jaccard}. Low-rank defenses filter adjacency via truncated SVD~\cite{entezari2020svd}. GNNGuard~\cite{zhang2020gnnguard} uses feature similarity to estimate neighbor importance and suppress messages along likely adversarial edges. Our ontology-guided defense uses the same high-level principle (semantic consistency) but implements it as an explicit ontology matrix used for both adjacency reweighting and feature projection.
 
 \section{Methodology}
 \subsection{System Pipeline}
-Figure~\ref{fig:system_flow} summarizes the implemented pipeline. We begin with data loading and preprocessing, train baseline models (GCN/GAT), generate perturbed graphs under each attack, evaluate metrics, then apply defenses against the strongest attack and re-evaluate. In addition to metric tables, the system produces interpretability artifacts: layer-wise output heatmaps, graph mosaics, confusion matrices, and embedding visualizations.
+The framework follows a consistent pipeline across datasets and threat models: (i) load and preprocess the graph, (ii) train a baseline GCN/GAT, (iii) generate an attacked graph or attacked features under a budget, (iv) evaluate attack impact with classification and robustness metrics, (v) identify the most impactful attack by accuracy drop, and (vi) evaluate defenses individually and in combination against that attack. Every stage produces artifacts (CSV tables and figures) to enable auditability and paper-ready reporting.
 
 \begin{figure*}[t]
 \centering
 \includeresult[width=0.95\textwidth]{system_flow.png}
-\caption{End-to-end pipeline implemented in the project: dataset loading, baseline training, attack generation (poisoning and evasion), evaluation with multiple metrics, defenses (feature smoothing and ontology-guided), and visualization outputs.}
+\caption{Implementation pipeline rendered from project outputs: dataset loading, baseline training, attack generation (poisoning and evasion), metric evaluation, defenses (pruning/smoothing/ontology), and visualization outputs.}
 \label{fig:system_flow}
 \end{figure*}
 
+\subsection{Evaluation Metrics}
+We report standard metrics (accuracy and macro/micro-F1) and robustness-oriented diagnostics. For a node $i$ with true class $y_i$, we define the \textit{classification margin} as:
+\begin{equation}
+m_i = Z_{i,y_i} - \max_{c\neq y_i} Z_{i,c},
+\end{equation}
+where $Z_{i,c}$ is the predicted probability for class $c$. Attacks aim to reduce the margin. We report \textit{margin drop} as the difference in average margin between clean and attacked settings. We also report \textit{attack success rate} (ASR) as the fraction of test nodes whose predicted label changes from correct to incorrect under the attack (implementation: computed from baseline vs attacked predictions under the same test mask for evasion, and via retrained models for poisoning).
+
+\subsection{Selecting the Most Impactful Attack}
+For each model, we compute accuracy drop relative to the baseline:
+\begin{equation}
+\Delta_{\mathrm{acc}}(\mathcal{A}) = \mathrm{Acc}_{\mathrm{base}} - \mathrm{Acc}_{\mathcal{A}}.
+\end{equation}
+The most impactful attack is $\arg\max_{\mathcal{A}} \Delta_{\mathrm{acc}}(\mathcal{A})$. Defenses are then evaluated against that attack to avoid cherry-picking.
+
+\section{Background and Problem Formulation}
+\subsection{Notation}
+Let $\mathcal{G}=(\mathcal{V},\mathcal{E})$ be a graph with $N=|\mathcal{V}|$ nodes. $\mathbf{A}\in\{0,1\}^{N\times N}$ is the adjacency matrix and $\mathbf{X}\in\mathbb{R}^{N\times F}$ the node feature matrix. The label vector is $\mathbf{y}\in\{1,\dots,C\}^{N}$ for $C$ classes. We use self-loops $\hat{\mathbf{A}}=\mathbf{A}+\mathbf{I}$ and $\hat{\mathbf{D}}$ as the degree matrix of $\hat{\mathbf{A}}$.
+
+\subsection{Two-Layer GCN}
+The two-layer GCN~\cite{kipf2017gcn} uses symmetric normalization $\tilde{\mathbf{A}}=\hat{\mathbf{D}}^{-1/2}\hat{\mathbf{A}}\hat{\mathbf{D}}^{-1/2}$:
+\begin{align}
+\mathbf{H}^{(1)} &= \mathrm{ReLU}(\tilde{\mathbf{A}}\mathbf{X}\mathbf{W}^{(0)}), \label{eq:gcn1}\\
+\mathbf{Z} &= \mathrm{softmax}(\tilde{\mathbf{A}}\mathbf{H}^{(1)}\mathbf{W}^{(1)}), \label{eq:gcn2}
+\end{align}
+where $\mathbf{W}^{(0)}\in\mathbb{R}^{F\times H}$ and $\mathbf{W}^{(1)}\in\mathbb{R}^{H\times C}$.
+
+\subsection{Two-Layer GAT}
+GAT~\cite{velickovic2018gat} uses attention coefficients on edges $(i,j)$:
+\begin{align}
+e_{ij} &= \mathrm{LeakyReLU}\big(\mathbf{a}^\top[\mathbf{W}\mathbf{h}_i \,\|\, \mathbf{W}\mathbf{h}_j]\big), \\
+\alpha_{ij} &= \mathrm{softmax}_j(e_{ij})=\frac{\exp(e_{ij})}{\sum_{k\in\mathcal{N}(i)}\exp(e_{ik})}, \\
+\mathbf{h}'_i &= \sum_{j\in\mathcal{N}(i)}\alpha_{ij}\mathbf{W}\mathbf{h}_j .
+\end{align}
+We use multi-head attention (4 heads) in the hidden layer with ELU activation, followed by a softmax output layer.
+
 \begin{figure*}[t]
 \centering
-\includeresult[width=0.92\textwidth]{gcn_gat_architecture.png}
-\caption{Model architectures used in this project. Both models follow a two-layer design; GCN uses normalized neighborhood aggregation, while GAT uses attention-weighted aggregation.}
-\label{fig:arch}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+  font=\small,
+  box/.style={draw, rounded corners, align=left, minimum height=8mm, inner sep=3mm},
+  op/.style={draw, rounded corners, fill=gray!10, align=center, minimum height=8mm, minimum width=28mm},
+  arrow/.style={-Latex, thick}
+]
+\node[box] (in) {\textbf{Input}\\Features $\mathbf{X}\in\mathbb{R}^{N\times F}$\\Adjacency $\mathbf{A}$\\Self-loops $\hat{\mathbf{A}}=\mathbf{A}+\mathbf{I}$};
+\node[op, right=7mm of in] (norm) {Normalize\\$\tilde{\mathbf{A}}=\hat{\mathbf{D}}^{-1/2}\hat{\mathbf{A}}\hat{\mathbf{D}}^{-1/2}$};
+\node[op, right=7mm of norm] (l1) {Layer 1\\$\mathbf{S}^{(1)}=\tilde{\mathbf{A}}\mathbf{X}$\\$\mathbf{U}^{(1)}=\mathbf{S}^{(1)}\mathbf{W}^{(0)}$\\$\mathbf{H}^{(1)}=\mathrm{ReLU}(\mathbf{U}^{(1)})$};
+\node[op, right=7mm of l1] (l2) {Layer 2\\$\mathbf{S}^{(2)}=\tilde{\mathbf{A}}\mathbf{H}^{(1)}$\\$\mathbf{U}^{(2)}=\mathbf{S}^{(2)}\mathbf{W}^{(1)}$\\$\mathbf{Z}=\mathrm{softmax}(\mathbf{U}^{(2)})$};
+\node[box, right=7mm of l2] (out) {\textbf{Output}\\Class probs $\mathbf{Z}$\\Prediction $\hat{y}_i=\arg\max_c Z_{ic}$};
+\draw[arrow] (in) -- (norm);
+\draw[arrow] (norm) -- (l1);
+\draw[arrow] (l1) -- (l2);
+\draw[arrow] (l2) -- (out);
+\end{tikzpicture}
+}%
+\caption{Detailed two-layer GCN computation graph used in this project (inputs, per-layer functions, and outputs). The code logs layer-wise tensors (pre-aggregation, post-normalization, post-activation, logits, probabilities) to connect attacks/defenses to internal computations.}
+\label{fig:gcn_arch}
 \end{figure*}
 
-\subsection{Datasets}
-\textbf{Static graph: Cora.} Cora is a citation network with sparse bag-of-words features and $7$ classes. It is a common benchmark for semi-supervised node classification, and its structure (citations) and features (keywords) create both homophily regions and noisy boundaries that are useful for robustness analysis.
+\subsection{Threat Model}
+We consider poisoning attackers that modify the training graph and evasion attackers that only modify inference-time inputs. Attacks are constrained by a budget $\Delta$ (edge flips, feature flips, or an $\ell_\infty$ bound for gradient attacks). The defender may deploy preprocessing and/or training-time defenses.
 
-\textbf{Dynamic graph: evolving synthetic stream.} To evaluate robustness under non-stationarity, we implement a dynamic graph generator that evolves by adding nodes and edges over time. This setting captures distribution shift, temporal sparsity, and changing neighborhood composition, which can interact with attack and defense behavior in ways that static evaluations do not reveal.
+\section{Attacks}
+\subsection{Poisoning Attacks}
+\textbf{Random Structure Corruption} rewires a budgeted number of edges uniformly at random (with optional feature corruption) to simulate large-scale non-adaptive perturbations.
+\textbf{Nettack}~\cite{zugner2018nettack} greedily selects structure/feature modifications that reduce the target node margin while respecting plausibility constraints.
+\textbf{Meta Attack}~\cite{zugner2019metattack} approximates bilevel optimization where the outer objective reflects the trained model loss under perturbations.
 
-\subsection{Attack Suite}
-We evaluate six attacks:
-\begin{itemize}
-\item Poisoning: Random Structure corruption (edge perturbations plus light feature corruption).
-\item Poisoning: Nettack-style targeted perturbations~\cite{zugner2018nettack}.
-\item Poisoning: Meta-learning attack that optimizes perturbations through a bilevel objective~\cite{zugner2019metattack}.
-\item Evasion: Edge Flip (localized degree-preserving structural manipulation around targets).
-\item Evasion: Feature perturbation (binary flips and continuous noise on selected nodes).
-\item Evasion: Gradient (FGSM-like) feature attack~\cite{goodfellow2015fgsm}.
-\end{itemize}
-
-While each attack differs in how it selects perturbations, they share a common principle: they seek to maximize loss or induce misclassification under a limited budget. Evasion attacks can be evaluated on a fixed trained model, whereas poisoning attacks require re-training on the modified graph to reflect realistic training-time corruption.
-
-\begin{algorithm}[t]
-\caption{Evaluation Procedure (Static or Dynamic Graph)}
-\label{alg:pipeline}
-\begin{algorithmic}[1]
-\STATE Load graph $\mathcal{G}=(\mathcal{V},\mathcal{E},\mathbf{X})$, labels $\mathbf{y}$, and train/test masks.
-\STATE Train baseline model $f_\theta$ (GCN or GAT) on clean data.
-\STATE Evaluate baseline metrics and store probabilities on the test set.
-\FOR{each attack $\mathcal{A}$ in attack suite}
-  \STATE Generate attacked data $\mathcal{G}_{\mathcal{A}}$ under budget $b$.
-  \IF{$\mathcal{A}$ is poisoning}
-    \STATE Train a new model on $\mathcal{G}_{\mathcal{A}}$.
-  \ENDIF
-  \STATE Evaluate attacked metrics and compute robustness metrics.
-\ENDFOR
-\STATE Select the most impactful attack (largest accuracy drop).
-\STATE Apply defenses (smoothing, ontology) and re-evaluate.
-\STATE Write CSV tables and visualization artifacts to \texttt{results/}.
-\end{algorithmic}
-\end{algorithm}
-
-\subsection{Evaluation Metrics}
-We report standard classification metrics: Accuracy, Precision, Recall, and Macro-F1. We additionally report probabilistic metrics (ROC-AUC and log-loss) to capture changes in confidence calibration under attack. For robustness, we track an Attack Success Rate (ASR) derived from relative accuracy degradation, along with margin-based confidence changes. Structural diagnostics include density, modularity, and conductance computed with respect to label-induced communities.
-
-\section{Defense Mechanisms}
-\subsection{Baseline Defense: Laplacian Feature Smoothing}
-As a simple and effective defense, we apply Laplacian smoothing to features prior to (re-)training. The intuition is that if the graph is largely homophilous, then nearby nodes should exhibit similar features; smoothing reduces high-frequency perturbations. A typical update is:
+\subsection{Evasion Attacks}
+\textbf{Evasion Edge Flip} modifies only the target node neighborhood at test-time, approximately preserving degree to isolate localized adjacency edits.
+\textbf{Evasion Feature} flips binary feature entries (or adds bounded noise for continuous features) only at inference time; training data remains untouched.
+\textbf{FGSM-like Feature Attack} applies a gradient-sign update~\cite{goodfellow2015fgsm}:
 \begin{equation}
-\mathbf{X}_{\mathrm{smooth}} = \alpha\mathbf{X} + (1-\alpha)\hat{\mathbf{A}}\mathbf{X},
+\mathbf{X}_{adv} = \mathbf{X} + \epsilon\cdot \mathrm{sign}(\nabla_{\mathbf{X}}\mathcal{L}(\mathbf{Z},\mathbf{y})),
 \end{equation}
-where $\hat{\mathbf{A}}$ is a normalized adjacency operator. We treat $\alpha$ as a tunable parameter and report the best setting used in the produced results.
+where $\epsilon$ is the perturbation magnitude.
+
+\section{Defenses}
+\subsection{Feature Smoothing and Consistency}
+We implement Laplacian feature smoothing:
+\begin{equation}
+\mathbf{X}_{smooth} = \alpha\mathbf{X} + (1-\alpha)\tilde{\mathbf{A}}\mathbf{X},
+\end{equation}
+and a feature-consistency penalty $\|\mathbf{X}-\tilde{\mathbf{A}}\mathbf{X}\|_2^2$ that encourages neighborhood-consistent signals.
+
+\subsection{Pruning Defense (Similarity Filtering)}
+We implement similarity-based pruning inspired by prior work~\cite{wu2019jaccard,zhang2020gnnguard}: edges between feature-dissimilar nodes are down-weighted or removed based on cosine/Jaccard similarity. This mitigates attacks that inject adversarial edges to connect unrelated regions.
 
 \subsection{Ontology-Guided Defense}
-The core idea of our ontology-guided defense is to encode a semantic prior over nodes and then use it to regularize message passing. In practice, we build an ontology matrix $\mathbf{O}$ that captures feature-label affinity and feature co-occurrence patterns (a lightweight proxy for ``topic'' semantics). We then use $\mathbf{O}$ in two complementary ways:
-\begin{enumerate}
-\item \textbf{Adjacency reweighting:} suspicious edges that connect semantically unrelated nodes are down-weighted, reducing the influence of likely adversarial connections.
-\item \textbf{Feature projection:} node features are projected toward a semantically consistent subspace, dampening adversarial feature edits that contradict the ontology.
-\end{enumerate}
-Unlike purely structural defenses (e.g., low-rank filtering~\cite{entezari2020svd}), this approach uses both features and labels to decide which information should propagate. This is particularly useful when the attacker targets features directly (as in gradient-based evasion).
+We construct an ontology matrix $\mathbf{O}$ from (i) feature co-occurrence similarity and (ii) feature-label affinity on the training set. The defense uses:
+\begin{align}
+\mathbf{A}' &= (1-\lambda)\mathbf{A}+\lambda\,\psi(\mathbf{O}), \\
+\mathbf{X}' &= (1-\lambda)\mathbf{X}+\lambda\,\mathbf{O}\mathbf{X},
+\end{align}
+where $\psi(\cdot)$ maps semantic affinity to edge weights. This suppresses messages that contradict semantic consistency and dampens adversarial feature edits.
 
 \begin{algorithm}[t]
-\caption{Ontology-Guided Defense (Feature Projection + Reweighted Aggregation)}
+\caption{Ontology-Guided Defense (Adjacency Reweighting + Feature Projection)}
 \label{alg:ontology}
 \begin{algorithmic}[1]
-\STATE Input: adjacency $\mathbf{A}$, features $\mathbf{X}$, labels $\mathbf{y}$ (training set), strength $\lambda$.
-\STATE Build ontology matrix $\mathbf{O}$ using feature--label affinity and co-occurrence statistics.
-\STATE Reweight edges: $\mathbf{A}' \leftarrow (1-\lambda)\mathbf{A} + \lambda\,\phi(\mathbf{O})$, where $\phi$ maps semantic affinity to edge weights.
+\STATE Input: adjacency $\mathbf{A}$, features $\mathbf{X}$, labels $\mathbf{y}$ (train), strength $\lambda$.
+\STATE Build ontology matrix $\mathbf{O}$ from feature co-occurrence and feature-label affinity.
+\STATE Reweight adjacency: $\mathbf{A}' \leftarrow (1-\lambda)\mathbf{A} + \lambda\,\psi(\mathbf{O})$.
 \STATE Project features: $\mathbf{X}' \leftarrow (1-\lambda)\mathbf{X} + \lambda\,\mathbf{O}\mathbf{X}$.
-\STATE Train or fine-tune GNN on $(\mathbf{A}',\mathbf{X}')$ and evaluate.
+\STATE Train/evaluate GNN on $(\mathbf{A}',\mathbf{X}')$.
 \end{algorithmic}
 \end{algorithm}
 
+\subsection{Combined Defense}
+We evaluate pruning-only, ontology-only, and pruning+ontology. The combined mode first prunes suspicious edges and then applies ontology reweighting/projection to further stabilize message passing.
+
+\section{Semantic Logic Design}
+This section clarifies why the proposed ontology-guided defense is \textit{not} equivalent to similarity pruning.
+\textbf{Similarity pruning} (e.g., cosine/Jaccard filtering) is purely geometric: it assigns edge trust directly from feature similarity and removes edges below a threshold. It does not define any explicit semantic entities, relations, or constraints, and it cannot express \textit{impossible} feature combinations or cross-topic contradictions.
+
+\textbf{Ontology-guided defense} introduces explicit semantic structure:
+\begin{itemize}
+\item \textbf{Concepts (classes):} \texttt{ResearchTopic} with dataset-specific topic classes (labels) and subtopics (subclasses).
+\item \textbf{Relations (object properties):} \texttt{indicatesTopic} (feature$\rightarrow$topic), \texttt{coOccursWith} (feature$\leftrightarrow$feature), \texttt{contradicts} (feature$\times$feature).
+\item \textbf{Attributes (data properties):} affinity score, co-occurrence score, and inheritance score.
+\item \textbf{Constraints and rules:} contradiction filtering and repair rules (SWRL-like) that detect semantically impossible combinations and reduce trust for edges/nodes that violate constraints.
+\item \textbf{Inheritance:} subtopics inherit parent semantics, enabling graded reasoning rather than hard class boundaries.
+\end{itemize}
+These symbolic structures drive two numeric signals for robust message passing: (i) semantic edge trust (used to reweight/prune edges) and (ii) semantic feature projection/repair (used to denoise adversarial feature edits). This is a knowledge-guided robustness mechanism, not a local similarity heuristic.
+
+\subsection{Ablation: Which Semantic Logic Helps?}
+To avoid unclear contribution sources, we ablate ontology components and report accuracy. The variants correspond to different semantic logic paths (co-occurrence graph only, label affinity only, rules only, projection only, full ontology).
+\inputtable{semantic_ablation.tex}
+
+\subsection{Benchmark: SOTA-Style Defense Comparisons}
+We benchmark the ontology defense against representative baselines implemented in our framework, including smoothing, GNNGuard-like similarity weighting, low-rank filtering (GNN-SVD), and adversarial training, and we report the best-performing variant per defense.
+\inputtable{defense_benchmark.tex}
+
 \section{Experimental Setup}
-We follow a standard train/validation/test split for Cora as produced by the dataset loader. Models use two layers, dropout, and Adam optimization. Poisoning attacks retrain the model on the perturbed graph to reflect the attack setting. Evasion attacks evaluate on the same trained weights. All random seeds are fixed for reproducibility in the provided code.
+\subsection{Datasets}
+\textbf{Static graph: Cora.} We use the Cora citation network for node classification with sparse bag-of-words features and 7 classes.
+\textbf{Dynamic graph: evolving snapshots.} We generate graph snapshots by applying controlled edge additions/removals and feature drift over time, and report aggregated robustness across snapshots.
 
-We emphasize transparency: each experiment run writes CSV metric tables and multiple figures into the \texttt{results/} directory, which are included in this report. This tight coupling between report and artifacts makes it easier to validate that the reported numbers correspond to actual executions.
+\subsection{Models and Training}
+Both GCN and GAT are instantiated as two-layer networks with dropout and Adam optimization. Poisoning attacks retrain the model on perturbed training data. Evasion attacks evaluate on fixed trained weights (training data unchanged).
 
-\subsection{Implementation Notes}
-The implementation is modular so that attacks, defenses, and visualizations can be extended without rewriting the training loop. Data loaders live under \texttt{datasets/}, models under \texttt{models/}, attacks under \texttt{attacks/}, defenses under \texttt{defenses/}, and plotting utilities under \texttt{visualization/}. The experiment driver (in \texttt{main.py}) orchestrates the following outputs:
-metric tables (CSV), graph mosaics, confusion matrices, t-SNE embedding plots, and layer-wise activation panels. These artifacts are stored under \texttt{results/} and are directly referenced by this report through the \texttt{\textbackslash graphicspath} configuration.
+\subsection{Metrics}
+We report accuracy, macro/micro-F1, ROC-AUC (one-vs-rest), log-loss, attack success rate (ASR), robustness score, perturbation rate, and margin drop. Metrics are printed as terminal tables and written to CSV.
 
 \section{Results}
 \subsection{Static Graph: Attack Comparison}
-Tables~\ref{tab:static_gcn_attacks} and~\ref{tab:static_gat_attacks} summarize the attack suite on Cora for GCN and GAT respectively. Two patterns are consistent across both architectures. First, random training-time structure corruption substantially reduces accuracy, which indicates that even non-adaptive perturbations can disrupt message passing when the budget is large. Second, the gradient-based evasion attack on features is catastrophic: it collapses accuracy to near-random performance, revealing that feature-space perturbations aligned with the loss gradient can overwhelm the learned decision boundary even when structural information is unchanged.
+Tables~\ref{tab:static_gcn_attacks} and~\ref{tab:static_gat_attacks} summarize the attack suite on Cora for GCN and GAT (before defenses). Across both models, gradient-aligned feature evasion causes the largest accuracy drop, demonstrating that feature-space perturbations aligned with the loss can overwhelm the decision boundary even when structure is unchanged.
 
 \inputtable{static_gcn_attacks.tex}
 \inputtable{static_gat_attacks.tex}
 
-\subsection{Static Graph: Defenses Against the Strongest Evasion Attack}
-Table~\ref{tab:static_gcn_defenses} reports post-attack defenses for GCN; Table~\ref{tab:static_gat_defenses} reports the same for GAT. Feature smoothing improves performance by filtering adversarial noise, and the ontology-guided defense further increases accuracy and macro-F1 in our runs. Importantly, the defended models not only recover accuracy but also exhibit improved calibration (lower log-loss) compared to the attacked baseline, suggesting that the defense stabilizes both predictions and confidence.
+\subsection{Static Graph: Defenses Against the Most Impactful Attack}
+Tables~\ref{tab:static_gcn_defenses} and~\ref{tab:static_gat_defenses} report defenses evaluated against the most impactful attack. Pruning and smoothing improve robustness, and ontology-based defenses further improve accuracy and calibration.
 
 \inputtable{static_gcn_defenses.tex}
 \inputtable{static_gat_defenses.tex}
 
-\subsection{Visualization: Graph, Embeddings, and Layer-wise Outputs}
-Quantitative metrics capture overall performance, but they do not explain \,\textit{why} the model fails or recovers. We therefore include multiple qualitative diagnostics.
-
-Figure~\ref{fig:graph_mosaic} visualizes a two-hop neighborhood around a representative target node across (i) clean graph, (ii) attacked graph (edge flips), and (iii) post-defense graph. The ontology defense tends to suppress edges that connect semantically inconsistent nodes, which restores a more coherent local neighborhood for message passing.
+\subsection{Qualitative Diagnostics}
+We include confusion matrices, t-SNE embeddings, and layer-wise output panels to validate that attacks shift internal representations and that defenses restore structure.
 
 \begin{figure*}[t]
 \centering
 \includeresult[width=0.95\textwidth]{graph_mosaic.png}
-\caption{Graph mosaic on Cora: clean subgraph, attacked subgraph (edge flips), and post-defense subgraph. The highlighted node indicates the local neighborhood used for comparison.}
+\caption{Local subgraph visualization (clean vs attacked vs defended) from project outputs. Even small perturbations can inject cross-community edges or distort neighborhood feature consistency, which propagates through message passing. Defenses suppress suspicious connections and restore a more coherent neighborhood.}
 \label{fig:graph_mosaic}
 \end{figure*}
-
-Figure~\ref{fig:robustness_curve} reports accuracy as a function of perturbation budget for two feature attacks, highlighting the steep robustness degradation as budgets increase. Figure~\ref{fig:confusions} shows confusion matrices for baseline, attacked, and ontology-defended models; the defended model reduces systematic confusions between semantically adjacent classes. Figure~\ref{fig:tsne} visualizes t-SNE embeddings, where the attacked embeddings exhibit class mixing and the defended embeddings partially restore separation.
 
 \begin{figure}[t]
 \centering
@@ -206,8 +283,8 @@ Figure~\ref{fig:robustness_curve} reports accuracy as a function of perturbation
 
 \begin{figure}[t]
 \centering
-\includeresult[width=0.98\columnwidth]{confusion_baseline.png}\
-\includeresult[width=0.98\columnwidth]{confusion_feature_attack.png}\
+\includeresult[width=0.98\columnwidth]{confusion_baseline.png}\\
+\includeresult[width=0.98\columnwidth]{confusion_feature_attack.png}\\
 \includeresult[width=0.98\columnwidth]{confusion_ontology_defense.png}
 \caption{Confusion matrices on Cora (top: baseline, middle: attacked, bottom: ontology defense).}
 \label{fig:confusions}
@@ -222,12 +299,10 @@ Figure~\ref{fig:robustness_curve} reports accuracy as a function of perturbation
 \label{fig:tsne}
 \end{figure*}
 
-Layer-wise outputs are useful for connecting attacks to internal computations. Figures~\ref{fig:layer_gcn} and~\ref{fig:layer_gat} show heatmaps of intermediate activations (truncated to a visible subset of nodes/features). Under feature attacks, we observe increased activation magnitudes in early layers and unstable logits, consistent with gradient-aligned perturbations. Defenses dampen these shifts by enforcing smoother feature manifolds and more consistent neighborhood aggregation.
-
 \begin{figure}[t]
 \centering
 \includeresult[width=0.98\columnwidth]{layer_outputs_gcn.png}
-\caption{GCN layer-wise output panel (pre-aggregation, post-normalization, post-activation, and logits).}
+\caption{GCN layer-wise output panel (pre-aggregation, post-normalization, post-activation, logits).}
 \label{fig:layer_gcn}
 \end{figure}
 
@@ -239,34 +314,42 @@ Layer-wise outputs are useful for connecting attacks to internal computations. F
 \end{figure}
 
 \subsection{Graph Structural Metrics}
-Table~\ref{tab:graph_metrics_static} reports density, modularity, and conductance on the clean, attacked, and defended graphs. Structural changes in small perturbation regimes may not significantly alter global density, yet modularity and conductance can shift when adversarial edges connect otherwise separated communities. These metrics provide a complementary lens: even if accuracy is stable, a sudden drop in modularity can indicate the graph has become less community-consistent and therefore more vulnerable to downstream aggregation errors.
-
 \inputtable{graph_metrics_static.tex}
 
-\subsection{Dynamic Graph: Robustness Under Evolution}
-Dynamic graphs introduce additional sources of instability: the neighborhood of a node can drift over time, and the model may face a moving distribution of features and edges. Table~\ref{tab:dynamic_gcn_summary} provides a compact summary of dynamic results for GCN, including representative poisoning and evasion attacks and the best-performing ontology defense variant produced by the current experiment artifacts.
-
+\subsection{Dynamic Graph Robustness}
 \inputtable{dynamic_gcn_summary.tex}
 \inputtable{graph_metrics_dynamic.tex}
-
-In the dynamic setting, absolute accuracy is lower due to the harder distribution and fewer stable homophilous patterns. Nevertheless, the same qualitative trend persists: feature-targeting attacks remain disproportionately damaging, and semantic defenses can recover accuracy when the ontology remains informative.
-
-\subsection{Dynamic Graph: Defense Hyperparameter Sweep}
-To avoid cherry-picking a single defense setting, we also report a sweep over smoothing and ontology strengths on the dynamic graph. Table~\ref{tab:dynamic_defense_sweep} lists the defense variants produced by the current run artifacts. In practice, $\alpha$ and $\lambda$ trade off faithfulness to original features against the strength of denoising/semantic projection; overly aggressive settings can wash out informative signals, while moderate settings can reduce adversarial high-frequency noise.
-
 \inputtable{dynamic_defense_sweep.tex}
 
 \section{Discussion}
-Three observations stand out.
-\textit{(1) Gradient-aligned feature attacks dominate.} When the attacker can access gradients (or approximate them), small perturbations in feature space can cause dramatic performance collapse. This indicates that robustness cannot rely solely on structural defenses.
-\textit{(2) Defense must preserve usefulness.} Over-aggressive filtering can remove informative edges and hurt clean accuracy. Our ontology-guided defense aims to be selective: it down-weights suspicious edges and projects features toward semantic consistency rather than hard-pruning large portions of the graph.
-\textit{(3) Interpretability artifacts help debugging.} Layer-wise outputs and embedding visualizations made it easier to confirm that the attack truly changes internal representations, and that defenses shift intermediate activations toward the clean regime.
+Three observations stand out. (1) Gradient-aligned feature attacks dominate in damage, implying defenses must directly address feature integrity. (2) Defenses must preserve utility: over-pruning or over-smoothing can harm clean accuracy. (3) Qualitative diagnostics (embeddings, confusion matrices, layer-wise outputs) help validate that observed accuracy changes correspond to meaningful representation shifts.
+
+\section{Broader Impact and Ethics}
+Robustness methods for GNNs can reduce harm in applications such as fraud detection, recommender systems, and knowledge graph analytics where adversaries may manipulate edges or features. Attack implementations are dual-use; this project is intended for research and educational evaluation with controlled budgets and public datasets.
 
 \section{Limitations and Future Work}
-This work has limitations that motivate follow-up improvements. The ontology matrix currently uses a lightweight proxy derived from available features and labels; richer ontologies (e.g., knowledge-graph relations) may yield stronger defenses but require additional data sources. The current evaluation also focuses on node classification; extending to link prediction or graph classification would test generality. Finally, a tighter threat model for black-box attackers and a systematic hyperparameter sweep for defense settings would improve realism and reproducibility.
+The ontology matrix here is derived from available features and labels; integrating external domain ontologies could improve semantic fidelity but requires additional data sources. Evaluations focus on node classification; extending to link prediction or graph classification would test generality. Future work should also explore stronger black-box attackers and systematic hyperparameter searches for defense tuning.
 
 \section{Conclusion}
-We implemented a full robustness evaluation framework for GCN and GAT under multiple poisoning and evasion attacks, and we provided a defense pipeline combining feature smoothing with an ontology-guided semantic regularization strategy. On the static Cora benchmark, gradient-based feature attacks cause the largest degradation, and the ontology-based defense substantially restores accuracy and improves confidence calibration. Dynamic evaluations reveal similar vulnerabilities under evolving graph structure. The repository includes complete experimental artifacts---CSV metric tables, graph mosaics, confusion matrices, embedding plots, and layer-wise output panels---to support transparent reporting and further extensions.
+We presented an end-to-end framework to study adversarial attacks on GCN and GAT for node classification and evaluated defenses including feature smoothing, pruning, and an ontology-guided semantic defense. On Cora and dynamic graph snapshots, gradient-based feature evasion is the most damaging attack, while pruning+ontology defenses recover a substantial portion of performance and improve calibration. The repository includes full artifacts suitable for reproducible research.
+
+\appendices
+\section{Reproducibility and Artifacts}
+All experiments write CSV tables and PNG figures to the project \texttt{results/} directory. The LaTeX report references these artifacts directly.
+
+\section{Ontology Construction Details}
+The ontology matrix $\mathbf{O}$ is constructed by combining (i) a feature co-occurrence similarity matrix (cosine similarity in feature space) and (ii) a feature-label affinity matrix estimated from the training set. The combination weight is a hyperparameter. This design aims to approximate topic-level semantics in citation graphs without requiring external knowledge bases.
+
+\section{Attack Implementation Notes}
+This appendix summarizes how each attack is realized in code to match the threat model.
+\textbf{Poisoning attacks} output a modified training graph and trigger retraining. Random structure corruption flips a large number of edges and optionally corrupts a small subset of features. Nettack selects candidate perturbations that reduce the target margin while preserving basic constraints (e.g., sparsity and feature validity). Meta attack approximates bilevel optimization by taking gradient steps on a relaxed perturbation representation and then discretizing.
+\textbf{Evasion attacks} keep the trained model fixed. Evasion edge flip edits only the target neighborhood with a small budget and aims to preserve degree distribution. Evasion feature flips a bounded number of binary feature indices for selected nodes, and the FGSM-like attack computes $\nabla_{\mathbf{X}}\mathcal{L}$ on the current model and applies an $\ell_\infty$-bounded sign update.
+
+\section{Defense Hyperparameters}
+Defenses introduce tuning parameters. Smoothing uses $\alpha\in[0,1]$; pruning uses a similarity threshold $\tau$ and a metric choice (cosine or Jaccard); ontology uses $\lambda\in[0,1]$ and a semantic weighting factor that trades off feature co-occurrence vs label affinity. In the experiments, we report a hyperparameter sweep for the dynamic setting to show the stability of results across reasonable ranges.
+
+\section{Dynamic Graph Generator}
+The dynamic dataset is a synthetic evolving-graph stream producing snapshots $\{\mathcal{G}_t\}_{t=1}^T$. Each step perturbs adjacency by adding/removing edges under a small rate and applies feature drift by injecting bounded noise into a subset of nodes. This generator provides a controlled testbed for robustness under distribution shift and evolving neighborhoods.
 
 \bibliographystyle{IEEEtran}
 \bibliography{refs}

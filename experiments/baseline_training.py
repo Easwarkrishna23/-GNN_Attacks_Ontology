@@ -6,14 +6,18 @@ from models.gat import GAT
 from utils.metrics import compute_classification_metrics
 import os
 
-def train_model(model, data, epochs=200, lr=0.01, weight_decay=5e-4):
+def train_model(model, data, epochs=200, lr=0.01, weight_decay=5e-4, regularizer=None, reg_weight=0.0, edge_weight=None):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     
     model.train()
     for epoch in range(epochs):
         optimizer.zero_grad()
+        if edge_weight is not None:
+            data.edge_weight = edge_weight
         out = model(data)
         loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])
+        if regularizer is not None and float(reg_weight) > 0:
+            loss = loss + float(reg_weight) * regularizer(out, data)
         loss.backward()
         optimizer.step()
         

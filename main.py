@@ -13,7 +13,7 @@ from pathlib import Path
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle
 from tabulate import tabulate
 
-from datasets.cora_loader import load_cora
+from datasets.planetoid_loader import load_planetoid
 from datasets.dynamic_graph import DynamicGraphGenerator
 from experiments.baseline_training import train_model, evaluate_model
 from models.gcn import GCN
@@ -24,15 +24,15 @@ from attacks.poisoning.metattack import run_metattack
 from attacks.evasion.structure_evasion import run_structure_evasion
 from attacks.evasion.feature_evasion import run_feature_evasion
 from attacks.evasion.fgsm_like import run_fgsm_like_feature_attack
+from attacks.evasion.adaptive_semantic import AdaptiveSemanticAttack
 from defenses.feature_defense import laplacian_feature_smoothing, feature_consistency_regularization
-from defenses.ontology_defense import (
-    build_ontology_matrix,
-    ontology_reweight_adjacency,
-    ontology_feature_projection,
-)
-from defenses.robust_filtering import top_k_pruning
+from defenses.robust_filtering import top_k_pruning, svd_defense, similarity_weighted_adj
+from defenses.adversarial_training import adversarial_train_model
+from ontology.ontology_defense import OntologyGuidedDefense, DefenseVariant
+from ontology.ontology_builder import OntologyBuilder
+from ontology.csv_to_owl_reasoner import generate_reasoned_ontology
 from utils.metrics import compute_robustness_metrics, perturbation_rate, compute_graph_metrics
-from visualization.graph_viz import visualize_graph_mosaic, visualize_graph_pair, visualize_attack_suite
+from visualization.graph_viz import visualize_graph_mosaic, visualize_graph_pair, visualize_attack_suite, visualize_triplet_separate
 from visualization.plotting import (
     plot_robustness_curves,
     plot_confusion_matrix,
@@ -507,104 +507,133 @@ def plot_tsne_mosaic(embeddings_list, labels, titles, save_path, sample_idx=None
     return save_path
 
 
-def export_ontology_artifacts(features, labels, target_node, out_dir="results/ontologies", top_k=5):
+def export_ontology_artifacts(artifacts, edge_index, out_dir="results/ontologies", top_k=8):
+    """
+    Export ontology artifacts produced by the OWL-guided builder.
+
+    This complements the Protégé-compatible exports:
+      results/ontologies/<dataset>/ontology.owl|rdf|ttl|swrl
+
+    Additional exports here are paper-friendly tables (CSV/MD):
+    - feature->topic mapping (top topic + affinity)
+    - topic hierarchy
+    - contradiction pairs (feature_i, feature_j)
+    - edge trust (top-k trusted edges per node on the observed graph)
+    """
     Path(out_dir).mkdir(parents=True, exist_ok=True)
 
-    variants = [
-        ("semantic_only", build_ontology_matrix(features, labels=None, semantic_weight=1.0)),
-        ("label_guided_w0_9", build_ontology_matrix(features, labels=labels, semantic_weight=0.9)),
-        ("label_guided_w0_7", build_ontology_matrix(features, labels=labels, semantic_weight=0.7)),
-    ]
+    # 1) Feature -> dominant topic mapping
+    A = artifacts.feature_class_affinity
+    dom = A.argmax(axis=1)
+    score = A.max(axis=1)
+    df = pd.DataFrame(
+        {
+            "feature_id": np.arange(A.shape[0], dtype=np.int64),
+            "feature_name": artifacts.feature_names,
+            "dominant_topic": [artifacts.class_names[int(c)] for c in dom.tolist()],
+            "affinity": score.astype(np.float32),
+        }
+    )
+    df.to_csv(os.path.join(out_dir, "ontology_feature_to_topic.csv"), index=False)
 
+    # 2) Topic hierarchy
     rows = []
-    for name, O in variants:
-        # Export an interpretable, sized-down ontology view:
-        # top-k ontology neighbors per node (excluding self). This avoids saving full NxN matrices.
-        for i in range(O.shape[0]):
-            sims = O[i].copy()
-            sims[i] = 0.0
-            if top_k >= len(sims):
-                idx = np.argsort(sims)[::-1]
-            else:
-                idx = np.argpartition(sims, -top_k)[-top_k:]
-                idx = idx[np.argsort(sims[idx])[::-1]]
-            for j in idx[:top_k]:
-                rows.append({"variant": name, "source": i, "target": int(j), "weight": float(sims[j])})
+    for parent, subs in artifacts.topic_hierarchy.items():
+        if not subs:
+            rows.append({"parent_topic": parent, "subtopic": "", "inheritance_score": ""})
+        for s in subs:
+            rows.append({"parent_topic": parent, "subtopic": s, "inheritance_score": artifacts.inheritance_score.get(s, "")})
+    pd.DataFrame(rows).to_csv(os.path.join(out_dir, "ontology_topic_hierarchy.csv"), index=False)
 
-    pd.DataFrame(rows).to_csv(os.path.join(out_dir, "ontology_topk_edges.csv"), index=False)
+    # 3) Contradictions
+    pairs = sorted(list(artifacts.contradiction_pairs))[:20000]
+    cd = pd.DataFrame(
+        {
+            "f_i": [int(i) for i, _ in pairs],
+            "f_j": [int(j) for _, j in pairs],
+            "name_i": [artifacts.feature_names[int(i)] for i, _ in pairs],
+            "name_j": [artifacts.feature_names[int(j)] for _, j in pairs],
+        }
+    )
+    cd.to_csv(os.path.join(out_dir, "ontology_contradictions.csv"), index=False)
 
-    # Human-readable example for one node
-    example_lines = []
-    example_lines.append("# Ontology Creation and Examples")
-    example_lines.append("")
-    example_lines.append("## How Ontologies Are Created")
-    example_lines.append("- We compute semantic similarity between node feature vectors using cosine similarity.")
-    example_lines.append("- Optionally, we blend semantic similarity with label agreement (label-guided ontology).")
-    example_lines.append("- Finally, we row-normalize to obtain a stochastic ontology matrix O (rows sum to 1).")
-    example_lines.append("")
-    example_lines.append("## Example: Target Node Ontology Neighbors")
-    example_lines.append(f"Target node: {int(target_node)} (label={int(labels[int(target_node)])})")
-    example_lines.append("")
-    for name, O in variants:
-        sims = O[int(target_node)].copy()
-        sims[int(target_node)] = 0.0
-        idx = np.argpartition(sims, -top_k)[-top_k:]
-        idx = idx[np.argsort(sims[idx])[::-1]]
-        example_lines.append(f"### Variant: {name}")
-        for j in idx[:top_k]:
-            example_lines.append(f"- neighbor={int(j)} label={int(labels[int(j)])} weight={float(sims[j]):.6f}")
-        example_lines.append("")
+    # 4) Edge trust on observed edges: top-k per node
+    ei = edge_index.astype(np.int64)
+    trust, conf = OntologyBuilder(artifacts.config).export_gnn_matrices(artifacts, ei)
+    # collect outgoing edges and take top-k trusted
+    by_src = {}
+    for u, v, w in zip(ei[0].tolist(), ei[1].tolist(), trust.tolist()):
+        by_src.setdefault(int(u), []).append((int(v), float(w)))
+    out_rows = []
+    for u, lst in by_src.items():
+        lst.sort(key=lambda t: t[1], reverse=True)
+        for v, w in lst[:top_k]:
+            out_rows.append({"source": u, "target": v, "trust": w})
+    pd.DataFrame(out_rows).to_csv(os.path.join(out_dir, "ontology_edge_trust_topk.csv"), index=False)
 
-    Path(os.path.join(out_dir, "ontology_examples.md")).write_text("\n".join(example_lines), encoding="utf-8")
-    # Also export a short variant summary for your report.
-    summary = []
-    summary.append("# Ontology Variants Summary")
-    summary.append("")
-    summary.append("We export only top-k semantic neighbors per node (not the full NxN ontology matrix).")
-    summary.append("Variants:")
-    summary.append("- semantic_only: cosine similarity on features only.")
-    summary.append("- label_guided_w0_9: 90% semantic similarity + 10% label agreement (for explanation only).")
-    summary.append("- label_guided_w0_7: 70% semantic similarity + 30% label agreement (for explanation only).")
-    summary.append("")
-    summary.append("Files:")
-    summary.append("- ontology_topk_edges.csv: (variant, source, target, weight) for all nodes.")
-    summary.append("- ontology_examples.md: human-readable example for one target node.")
-    Path(os.path.join(out_dir, "ontology_summary.md")).write_text("\n".join(summary), encoding="utf-8")
+    # 5) Human-readable summary
+    md = []
+    md.append("# Ontology Artifacts Summary")
+    md.append("")
+    md.append("Protégé exports (OWL/RDF/Turtle/SWRL):")
+    md.append(f"- ontology.owl / ontology.rdf / ontology.ttl / ontology.swrl")
+    md.append("")
+    md.append("Paper-friendly exports:")
+    md.append("- ontology_feature_to_topic.csv")
+    md.append("- ontology_topic_hierarchy.csv")
+    md.append("- ontology_contradictions.csv")
+    md.append("- ontology_edge_trust_topk.csv")
+    Path(os.path.join(out_dir, "ontology_artifacts.md")).write_text("\n".join(md), encoding="utf-8")
     return out_dir
 
 
 def write_detailed_explanation(save_path, attack_examples=None, metric_summary=None, dataset_stats=None, worst_attack_name=None):
+    """
+    Writes a beginner-friendly explanation and output guide.
+    Keep the language simple and connect each output artifact to "what it proves".
+    """
     lines = []
     lines.append("# Adversarial Attacks on GNNs (GCN/GAT): Explanation and Output Guide")
     lines.append("")
-    lines.append("## How To Run (Clean Rerun)")
+    lines.append("## Beginner-Friendly Walkthrough (Read This First)")
+    lines.append("This project is a simple story:")
+    lines.append("1. Train GCN and GAT on a clean graph dataset (baseline).")
+    lines.append("2. Apply attacks that modify edges (graph structure) or features (node words).")
+    lines.append("3. Apply defenses to reduce the damage and re-test node classification.")
+    lines.append("")
+    lines.append("Key idea:")
+    lines.append("- GNNs do neighborhood mixing. If neighbors or features are tampered, the mixed signal becomes wrong.")
+    lines.append("")
+    lines.append("## How To Run")
     lines.append("```bash")
-    lines.append("python3 main.py --clean --profile paper")
+    lines.append("python3 main.py --clean --profile paper --dataset Cora")
     lines.append("```")
     lines.append("")
-    lines.append("This deletes every previously generated file under `results/` and regenerates ONLY the final paper-style outputs.")
-    lines.append("")
-    lines.append("## Dataset")
-    lines.append("- Static dataset: **Cora** citation network.")
-    lines.append("- Dynamic dataset: synthetic evolving snapshots stored under `data/dynamic/`.")
+    lines.append("## Datasets")
+    lines.append("- Static datasets: Cora, Citeseer, PubMed (citation networks).")
+    lines.append("- Dynamic dataset: synthetic evolving snapshots saved under `data/dynamic/`.")
     if dataset_stats:
-        lines.append(f"- Cora stats: nodes={dataset_stats.get('num_nodes')}, edges={dataset_stats.get('num_edges')}, features={dataset_stats.get('num_features')}, classes={dataset_stats.get('num_classes')}.")
+        lines.append(f"- Dataset stats: nodes={dataset_stats.get('num_nodes')}, edges={dataset_stats.get('num_edges')}, features={dataset_stats.get('num_features')}, classes={dataset_stats.get('num_classes')}.")
     lines.append("")
-    lines.append("## Models")
+    lines.append("### What Are X and A?")
+    lines.append("- `X` (features): each node has a feature vector (in Planetoid datasets: word/term features).")
+    lines.append("- `A` (adjacency): edges (citations) telling which node is connected to which.")
+    lines.append("")
+    lines.append("## Models (2-Layer Versions)")
     lines.append("### GCN")
-    lines.append("- Normalize: `Â = A + I`, `S = D̂^{-1/2} Â D̂^{-1/2}`.")
-    lines.append("- Layer 1: `H^{(1)} = ReLU(S X W^{(0)})`.")
-    lines.append("- Layer 2: `Z = Softmax(S H^{(1)} W^{(1)})`.")
+    lines.append("- Adds self-loops so each node also sees itself.")
+    lines.append("- Normalizes by degree so high-degree nodes do not dominate.")
+    lines.append("- Layer 1: mix neighbors + linear weights + ReLU.")
+    lines.append("- Layer 2: mix again + output a probability for each class.")
     lines.append("")
     lines.append("### GAT")
-    lines.append("- Attention per head: `e_{ij} = a^T[Wh_i || Wh_j]`, `α_{ij} = softmax_j(LeakyReLU(e_{ij}))`.")
-    lines.append("- Layer 1 (multi-head): `h_i^{(1)} = ||_k Σ_{j∈N(i)} α_{ij}^k W^k h_j` (ELU).")
-    lines.append("- Layer 2: aggregate -> logits -> Softmax.")
+    lines.append("- Same goal as GCN, but it learns attention weights (which neighbors matter more).")
+    lines.append("- Multi-head attention in layer 1 improves stability.")
     lines.append("")
-    lines.append("## Attacks (3 Poisoning + 3 Evasion)")
-    lines.append("### Poisoning vs Evasion")
-    lines.append("- Poisoning: modifies training data/graph; model is trained on poisoned input.")
-    lines.append("- Evasion: modifies inference-time input only; training graph is untouched.")
+    lines.append("## Attacks")
+    lines.append("Two categories:")
+    lines.append("- Poisoning: attacker changes training data; model is retrained on poisoned graph.")
+    lines.append("- Evasion: attacker changes only inference-time inputs; model weights are fixed.")
     lines.append("")
     attack_impl = {
         "Poisoning: Random Structure": "attacks/poisoning/random_poison.py",
@@ -613,89 +642,94 @@ def write_detailed_explanation(save_path, attack_examples=None, metric_summary=N
         "Evasion: Edge Flip": "attacks/evasion/structure_evasion.py",
         "Evasion: Feature": "attacks/evasion/feature_evasion.py",
         "Evasion: Gradient (FGSM-like)": "attacks/evasion/fgsm_like.py",
+        "Evasion: Adaptive Semantic": "attacks/evasion/adaptive_semantic.py",
     }
     attack_what_changes = {
-        "Poisoning: Random Structure": "changes A (edges) and lightly corrupts X, then retrains",
+        "Poisoning: Random Structure": "changes A (edges) and slightly corrupts X, then retrains",
         "Poisoning: Nettack": "changes A near target nodes, then retrains",
         "Poisoning: Meta Attack": "changes A globally (proxy Metattack), then retrains",
         "Evasion: Edge Flip": "changes A at inference only (model fixed)",
         "Evasion: Feature": "changes X at inference only (A unchanged, model fixed)",
-        "Evasion: Gradient (FGSM-like)": "changes X using gradient sign at inference only (A unchanged, model fixed)",
+        "Evasion: Gradient (FGSM-like)": "changes X using gradient sign (A unchanged, model fixed)",
+        "Evasion: Adaptive Semantic": "changes X in a semantically plausible way to try to bypass pruning (model fixed)",
     }
-    lines.append("### Per-Attack Explanation With One Concrete Cora Datapoint")
+    lines.append("### Per-Attack Example (One Real Node)")
     if attack_examples:
         for name, ex in attack_examples.items():
             lines.append(f"#### {name}")
-            lines.append(f"- implementation file: `{attack_impl.get(name, 'attacks/...')}`")
+            lines.append(f"- code: `{attack_impl.get(name, 'attacks/...')}`")
             lines.append(f"- what changes: {attack_what_changes.get(name, 'A and/or X')}")
-            lines.append("- why it creates the issue: GCN/GAT aggregate neighbor signals; perturbing A or X corrupts the neighborhood messages and shrinks the classification margin.")
-            lines.append("- example datapoint:")
-            lines.append(f"  - target_node={ex.get('target_node')} true_label={ex.get('label')}")
+            lines.append("- why it hurts: the model mixes neighbor information; corrupted neighbors/features distort embeddings.")
+            lines.append(f"- example node: target_node={ex.get('target_node')} true_label={ex.get('label')}")
             lines.append(f"  - pred_clean -> pred_attacked: {ex.get('pred_clean')} -> {ex.get('pred_attacked')}")
-            lines.append(f"  - conf_clean -> conf_attacked: {ex.get('conf_clean'):.4f} -> {ex.get('conf_attacked'):.4f}")
-            lines.append(f"  - margin_clean -> margin_attacked: {ex.get('margin_clean'):.4f} -> {ex.get('margin_attacked'):.4f}")
-            if "x_clean_first10" in ex:
-                lines.append(f"  - x_clean_first10: {ex.get('x_clean_first10')}")
-                lines.append(f"  - x_attacked_first10: {ex.get('x_attacked_first10')}")
-            if "edges_added_sample" in ex:
-                lines.append(f"  - edges_added_sample: {ex.get('edges_added_sample')}")
-                lines.append(f"  - edges_removed_sample: {ex.get('edges_removed_sample')}")
-            lines.append(f"  - perturbation budget used: {ex.get('budget')}")
+            lines.append(f"  - confidence: {ex.get('conf_clean'):.4f} -> {ex.get('conf_attacked'):.4f}")
+            lines.append(f"  - margin: {ex.get('margin_clean'):.4f} -> {ex.get('margin_attacked'):.4f}")
+            if ex.get("edges_added_sample") is not None:
+                lines.append(f"  - sample edges added: {ex.get('edges_added_sample')}")
+                lines.append(f"  - sample edges removed: {ex.get('edges_removed_sample')}")
+            if ex.get("x_clean_first10") is not None:
+                lines.append(f"  - first10 features (clean): {ex.get('x_clean_first10')}")
+                lines.append(f"  - first10 features (attacked): {ex.get('x_attacked_first10')}")
             lines.append("")
     else:
-        lines.append("- (attack_examples not provided)")
+        lines.append("- (attack_examples not available in this run)")
     lines.append("")
-    lines.append("## Selecting The Worst Attack")
-    lines.append("- We compute test accuracy for every attack (GCN).")
-    lines.append("- `Accuracy Drop = Accuracy(Baseline) - Accuracy(Attack)`.")
-    lines.append("- The attack with maximum accuracy drop is reported in the terminal as:")
-    lines.append("  - `The most impactful Attack is : <name> (accuracy drop=...)`")
+    lines.append("## Selecting the Most Harmful Attack")
+    lines.append("- We compute accuracy for every attack on the test set (GCN).")
+    lines.append("- Accuracy Drop = Accuracy(Baseline) - Accuracy(Attack).")
     if worst_attack_name:
-        lines.append(f"- In this run: worst attack = `{worst_attack_name}`.")
+        lines.append(f"- Worst attack (this run): `{worst_attack_name}`.")
     lines.append("")
-    lines.append("## Defenses (Evaluated Individually Then Combined)")
-    lines.append("We apply defenses only against the single most impactful attack.")
+    lines.append("## Defenses")
+    lines.append("We defend ONLY the worst attack (so results are not cherry-picked).")
     lines.append("")
-    lines.append("### 1) Base Defense: Feature Smoothing")
-    lines.append("- `X_s = α X + (1-α) Â X`")
-    lines.append("- This reduces high-frequency feature noise that adversarial perturbations introduce.")
+    lines.append("### Smoothing")
+    lines.append("- Averages features with neighbors to remove noise.")
     lines.append("")
-    lines.append("### 2) Pruning Defense")
-    lines.append("- Keep top-k most similar neighbors per node (feature cosine similarity).")
-    lines.append("- Removes suspicious/dissimilar edges that can amplify adversarial messages.")
+    lines.append("### Similarity pruning / GNNGuard-like filtering")
+    lines.append("- Assign edge trust using similarity; remove or down-weight suspicious edges.")
     lines.append("")
-    lines.append("### 3) Ontology Defense (Semantic Similarity)")
-    lines.append("- Build ontology similarity matrix `O` from cosine similarity of node feature vectors.")
-    lines.append("- Feature projection: `X' = X + λ OX`.")
-    lines.append("- Adjacency reweight: `A' = clip(A + λ O, 0, 1)` (then symmetrize + add self-loops).")
+    lines.append("### GNN-SVD (low-rank filtering)")
+    lines.append("- Approximates adjacency with a low-rank matrix to remove structural noise.")
     lines.append("")
-    lines.append("### 4) Combined Defense")
-    lines.append("- Ontology projection -> ontology adjacency reweight -> pruning.")
-    lines.append("- We evaluate base, pruning, ontology, combined; then select the best by accuracy.")
+    lines.append("### Ontology-guided semantic defense (main contribution)")
+    lines.append("Ontology defense is NOT the same as similarity pruning.")
+    lines.append("- It creates explicit semantic concepts (topics and subtopics), relations, and rules.")
+    lines.append("- It detects contradictions (impossible feature combinations).")
+    lines.append("- It repairs features and computes semantic edge trust for robust message passing.")
     lines.append("")
-    lines.append("## Ontologies Created (Files)")
-    lines.append("- `results/ontologies/ontology_topk_edges.csv`: top-k neighbors for every node, for each ontology variant.")
-    lines.append("- `results/ontologies/ontology_examples.md`: a small example ontology neighborhood for one target node.")
-    lines.append("- `results/ontologies/ontology_summary.md`: what each ontology variant means.")
+    lines.append("Protégé exports:")
+    lines.append("- `results/ontologies/<Dataset>/ontology.owl`")
+    lines.append("- `results/ontologies/<Dataset>/ontology.ttl`")
+    lines.append("- `results/ontologies/<Dataset>/ontology.swrl`")
     lines.append("")
-    lines.append("## Outputs Explained")
-    lines.append("### Tables (ONLY final tables)")
-    lines.append("- `results/FINAL_TABLE_PRE_DEFENSE.csv`: baseline + all attacks (GCN and GAT).")
-    lines.append("- `results/FINAL_TABLE_POST_DEFENSE.csv`: baseline + worst attack + defenses (GCN and GAT).")
-    lines.append("- `results/metrics_terminal.txt`: CSV-form versions of the above tables (no ANSI).")
+    lines.append("## Outputs (What Proves What)")
+    lines.append("### Terminal tables")
+    lines.append("- PRE-DEFENSE table: shows attacks actually reduce node classification metrics.")
+    lines.append("- POST-DEFENSE table: shows defenses recover accuracy/F1 on the worst attack.")
     lines.append("")
-    lines.append("### Figures (paper-style)")
-    lines.append("- `results/FIG_workflow.png`: entire workflow of the project.")
-    lines.append("- `results/FIG_gcn_layerwise.png`: detailed GCN layer-wise math and outputs.")
-    lines.append("- `results/FIG_gat_layerwise.png`: detailed GAT attention math and outputs.")
-    lines.append("- `results/FIG_attack_defense_flow.png`: clean -> attack -> defense flow.")
-    lines.append("- `results/FIG_attack_suite.png`: dataset change visualization for each attack.")
-    lines.append("- `results/FIG_graph_diff_worst.png`: clean vs worst-attacked vs defended graph diffs.")
-    lines.append("- `results/FIG_class_clusters.png`: class clusters for clean/attacked/defended embeddings.")
+    lines.append("### Visual proof (graphs)")
+    lines.append("- `results/FIG_graph_diff_worst.png`: clean vs attacked vs defended (3 panels).")
+    lines.append("- `results/FIG_worst_clean.png`, `results/FIG_worst_attacked.png`, `results/FIG_worst_defended.png`: the same subgraph saved separately with aligned positions.")
+    lines.append("Legend in the images:")
+    lines.append("- red edges: edges added by attack")
+    lines.append("- black dashed edges: edges removed by attack")
+    lines.append("- green edges: edges added by defense")
+    lines.append("- blue dashed edges: edges removed by defense")
+    lines.append("- red rings: nodes whose features were changed by the attack")
+    lines.append("- green rings: nodes whose features were repaired/changed by the defense")
+    lines.append("- purple rings: nodes whose predicted class changed (node classification effect)")
+    lines.append("- black rings: misclassified nodes")
     lines.append("")
-    lines.append("## Real-World Relevance")
-    lines.append("- Citation graphs: attackers can inject fake citations or distort paper text features to misclassify topics.")
-    lines.append("- Social/fraud graphs: injected edges/features can hide malicious nodes; pruning + ontology reduce attacker leverage.")
+    lines.append("### CSV tables saved")
+    lines.append("- `results/FINAL_TABLE_PRE_DEFENSE.csv`")
+    lines.append("- `results/FINAL_TABLE_POST_DEFENSE.csv`")
+    lines.append("- `results/SEMANTIC_ABLATION.csv` (co-occurrence only vs rules only vs full ontology)")
+    lines.append("- `results/DEFENSE_BENCHMARK.csv` (smoothing / GNNGuard-like / SVD / adversarial training / ontology / combined)")
+    lines.append("")
+    lines.append("## Real-world relevance")
+    lines.append("- Citation graphs: fake citations or edited text features can misclassify papers.")
+    lines.append("- Fraud/social graphs: injected edges/features can hide malicious nodes; semantic constraints reduce attacker leverage.")
     lines.append("")
     if metric_summary:
         lines.append("## Run Summary")
@@ -971,143 +1005,131 @@ def _symmetrize_and_self_loop(adj):
     return adj
 
 
-def apply_feature_defenses(clean_adj, clean_features, labels, attacked_data, model, model_builder, model_name="GCN"):
+def apply_feature_defenses(
+    clean_adj,
+    clean_features,
+    labels,
+    attacked_data,
+    model,
+    model_builder,
+    ontology_defense: OntologyGuidedDefense,
+    model_name="GCN",
+):
+    """
+    Evaluate defenses against the most impactful attack.
+
+    This function now includes:
+    - Smoothing baseline
+    - GNNGuard-like similarity reweighting / pruning
+    - GNN-SVD (low-rank adjacency)
+    - Adversarial training (feature-space robustness)
+    - Ontology variants (ablation) + Full ontology + Combined (ontology + pruning)
+    """
     rows = []
+    attacked_metrics, _, _ = evaluate_model(model, attacked_data)
+
     best_base = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
     best_pruning = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
     best_ontology = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
     best_combined = {"name": None, "metrics": None, "pred": None, "probs": None, "data": None, "adj": None, "model": model}
 
-    attacked_metrics, _, _ = evaluate_model(model, attacked_data)
-    alphas = [0.3, 0.5, 0.7, 0.85]
-    lambdas = [0.05, 0.1, 0.2]
-    k_values = [5, 10, 15, 20]
-    ontology = build_ontology_matrix(clean_features, labels=labels, semantic_weight=0.9)
     attacked_adj = _symmetrize_and_self_loop(adj_from_edge_index(attacked_data.edge_index, attacked_data.num_nodes))
+    attacked_x_np = attacked_data.x.detach().cpu().numpy().astype(np.float32)
 
-    for alpha in alphas:
-        data_def_smooth = attacked_data.clone()
-        data_def_smooth.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=alpha)
-        consistency_value = feature_consistency_regularization(data_def_smooth.x, clean_adj)
-        m_s, pred_s, p_s = evaluate_model(model, data_def_smooth)
-        rows.append((f"Defense: Feature Smoothing (alpha={alpha})", m_s, pred_s, p_s, data_def_smooth, consistency_value, clean_adj))
-        if best_base["metrics"] is None or m_s["accuracy"] > best_base["metrics"]["accuracy"]:
-            best_base = {"name": f"Defense: Feature Smoothing (alpha={alpha})", "metrics": m_s, "pred": pred_s, "probs": p_s, "data": data_def_smooth, "adj": clean_adj, "model": model}
+    # 1) Feature smoothing baseline
+    for alpha in [0.3, 0.5, 0.7, 0.85]:
+        data_def = attacked_data.clone()
+        data_def.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=alpha)
+        consistency_value = float(feature_consistency_regularization(data_def.x, clean_adj))
+        m, pred, probs = evaluate_model(model, data_def)
+        rows.append((f"Defense: Smoothing (alpha={alpha})", m, pred, probs, data_def, consistency_value, clean_adj))
+        if best_base["metrics"] is None or m["accuracy"] > best_base["metrics"]["accuracy"]:
+            best_base = {"name": f"Defense: Smoothing (alpha={alpha})", "metrics": m, "pred": pred, "probs": probs, "data": data_def, "adj": clean_adj, "model": model}
 
-    # Pruning-only defense (structure filtering), applied at inference on attacked graph/features.
-    attacked_x_np = attacked_data.x.detach().cpu().numpy()
-    for k in k_values:
+    # 2) GNNGuard-like similarity reweighting + pruning
+    #    (a) top-k pruning (hard)
+    for k in [10, 15, 20]:
         adj_pruned = top_k_pruning(attacked_adj, attacked_x_np, k=k)
         adj_pruned = _symmetrize_and_self_loop(adj_pruned)
-        data_def_prune = pyg_from_adj_and_x(attacked_data, adj_pruned, attacked_x_np)
-        m_p, pred_p, p_p = evaluate_model(model, data_def_prune)
-        rows.append((f"Defense: Pruning (top-k={k})", m_p, pred_p, p_p, data_def_prune, 0.0, adj_pruned))
-        if best_pruning["metrics"] is None or m_p["accuracy"] > best_pruning["metrics"]["accuracy"]:
-            best_pruning = {"name": f"Defense: Pruning (top-k={k})", "metrics": m_p, "pred": pred_p, "probs": p_p, "data": data_def_prune, "adj": adj_pruned, "model": model}
+        data_def = pyg_from_adj_and_x(attacked_data, adj_pruned, attacked_x_np)
+        m, pred, probs = evaluate_model(model, data_def)
+        rows.append((f"Defense: Pruning (top-k={k})", m, pred, probs, data_def, 0.0, adj_pruned))
+        if best_pruning["metrics"] is None or m["accuracy"] > best_pruning["metrics"]["accuracy"]:
+            best_pruning = {"name": f"Defense: Pruning (top-k={k})", "metrics": m, "pred": pred, "probs": probs, "data": data_def, "adj": adj_pruned, "model": model}
+    #    (b) similarity-weighted adjacency (soft, like neighbor importance weighting)
+    try:
+        adj_guard = similarity_weighted_adj(attacked_adj, attacked_x_np, metric="cosine", threshold=0.001)
+        adj_guard = _symmetrize_and_self_loop(adj_guard)
+        coo = adj_guard.tocoo()
+        data_guard = attacked_data.clone()
+        data_guard.edge_index = torch.tensor(np.vstack([coo.row, coo.col]), dtype=torch.long, device=attacked_data.edge_index.device)
+        data_guard.edge_weight = torch.tensor(coo.data.astype(np.float32), dtype=torch.float32, device=attacked_data.edge_index.device)
+        m, pred, probs = evaluate_model(model, data_guard)
+        rows.append(("Defense: GNNGuard-like (similarity weights)", m, pred, probs, data_guard, 0.0, adj_guard))
+        if best_pruning["metrics"] is None or m["accuracy"] > best_pruning["metrics"]["accuracy"]:
+            best_pruning = {"name": "Defense: GNNGuard-like (similarity weights)", "metrics": m, "pred": pred, "probs": probs, "data": data_guard, "adj": adj_guard, "model": model}
+    except Exception as e:
+        print(f"[{model_name}] GNNGuard-like weighting skipped: {e}")
 
-    for lam in lambdas:
-        # Ontology defense: (1) project features toward semantic neighbors, and
-        # (2) reweight adjacency toward ontology similarity.
-        x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=lam)
-        x_proj_np = x_proj.detach().cpu().numpy()
-        adj_onto = ontology_reweight_adjacency(attacked_adj, ontology, lam=lam)
-        adj_onto = _symmetrize_and_self_loop(adj_onto)
-        data_def_onto = pyg_from_adj_and_x(attacked_data, adj_onto, x_proj_np)
-        m_o, pred_o, p_o = evaluate_model(model, data_def_onto)
-        rows.append((f"Defense: Ontology (adj+feature, lambda={lam})", m_o, pred_o, p_o, data_def_onto, 0.0, adj_onto))
-        if best_ontology["metrics"] is None or m_o["accuracy"] > best_ontology["metrics"]["accuracy"]:
-            best_ontology = {
-                "name": f"Defense: Ontology (adj+feature, lambda={lam})",
-                "metrics": m_o,
-                "pred": pred_o,
-                "probs": p_o,
-                "data": data_def_onto,
-                "adj": adj_onto,
-                "model": model,
-            }
+    # 3) GNN-SVD (low-rank adjacency filtering)
+    try:
+        adj_svd = svd_defense(attacked_adj, k=min(50, attacked_adj.shape[0] - 2))
+        adj_svd = _symmetrize_and_self_loop(adj_svd)
+        data_svd = pyg_from_adj_and_x(attacked_data, adj_svd, attacked_x_np)
+        m, pred, probs = evaluate_model(model, data_svd)
+        rows.append(("Defense: GNN-SVD (low-rank)", m, pred, probs, data_svd, 0.0, adj_svd))
+    except Exception as e:
+        print(f"[{model_name}] GNN-SVD skipped: {e}")
 
-    # Combined pruning + ontology (project features then prune edges using projected similarity).
-    for lam in [0.1, 0.2]:
-        x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=lam)
-        x_proj_np = x_proj.detach().cpu().numpy()
-        for k in [10, 15]:
-            adj_onto = ontology_reweight_adjacency(attacked_adj, ontology, lam=lam)
-            adj_onto = _symmetrize_and_self_loop(adj_onto)
-            adj_pruned = top_k_pruning(adj_onto, x_proj_np, k=k)
-            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
-            data_def_combo = pyg_from_adj_and_x(attacked_data, adj_pruned, x_proj_np)
-            m_c, pred_c, p_c = evaluate_model(model, data_def_combo)
-            rows.append((f"Defense: Pruning+Ontology (k={k}, lambda={lam})", m_c, pred_c, p_c, data_def_combo, 0.0, adj_pruned))
-            if best_combined["metrics"] is None or m_c["accuracy"] > best_combined["metrics"]["accuracy"]:
-                best_combined = {
-                    "name": f"Defense: Pruning+Ontology (k={k}, lambda={lam})",
-                    "metrics": m_c,
-                    "pred": pred_c,
-                    "probs": p_c,
-                    "data": data_def_combo,
-                    "adj": adj_pruned,
-                    "model": model,
-                }
+    # 4) Ontology ablations + Full ontology
+    ablation_variants = [
+        (DefenseVariant.COOCCURRENCE_ONLY, "Ontology: Co-occurrence only"),
+        (DefenseVariant.LABEL_AFFINITY_ONLY, "Ontology: Label affinity only"),
+        (DefenseVariant.OWL_RULES_ONLY, "Ontology: OWL rules only"),
+        (DefenseVariant.SEMANTIC_PROJECTION_ONLY, "Ontology: Semantic projection only"),
+        (DefenseVariant.FULL_ONTOLOGY, "Ontology: Full"),
+    ]
+    for var, label in ablation_variants:
+        out = ontology_defense.defend(attacked_data, variant=var, lam=0.3, prune_threshold=0.15, anomaly_repair_threshold=0.15)
+        out.data.edge_weight = out.edge_weight
 
-    if best_ontology["metrics"] is None or best_ontology["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
-        x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=0.1)
-        x_proj_np = x_proj.detach().cpu().numpy()
-        adj_onto = ontology_reweight_adjacency(attacked_adj, ontology, lam=0.1)
-        adj_onto = _symmetrize_and_self_loop(adj_onto)
-        data_def_onto = pyg_from_adj_and_x(attacked_data, adj_onto, x_proj_np)
-        retrained_model = train_model(model_builder(), data_def_onto, epochs=80)
-        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_onto)
-        rows.append(("Defense: Ontology + Retrain", m_r, pred_r, p_r, data_def_onto, 0.0, adj_onto))
-        if best_ontology["metrics"] is None or m_r["accuracy"] > best_ontology["metrics"]["accuracy"]:
-            best_ontology = {"name": "Defense: Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_onto, "adj": adj_onto, "model": retrained_model}
-
-    if best_pruning["metrics"] is None or best_pruning["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
-        # Retrain on pruned structure if pruning-only did not help.
-        if best_pruning["data"] is not None:
-            data_def_prune = best_pruning["data"]
+        # For the full ontology variant, include semantic regularization during retraining.
+        if var == DefenseVariant.FULL_ONTOLOGY:
+            reg_fn = lambda o, d: ontology_defense.semantic_regularizer(o, d, edge_weight=out.edge_weight, lam_edge=0.3, lam_topic=0.3)
+            retr = train_model(model_builder(), out.data, epochs=140, regularizer=reg_fn, reg_weight=0.2, edge_weight=out.edge_weight)
+            m, pred, probs = evaluate_model(retr, out.data)
+            rows.append((f"Defense: {label} + Retrain", m, pred, probs, out.data, 0.0, adj_from_edge_index(out.data.edge_index, out.data.num_nodes)))
+            if best_ontology["metrics"] is None or m["accuracy"] > best_ontology["metrics"]["accuracy"]:
+                best_ontology = {"name": f"Defense: {label} + Retrain", "metrics": m, "pred": pred, "probs": probs, "data": out.data, "adj": adj_from_edge_index(out.data.edge_index, out.data.num_nodes), "model": retr}
         else:
-            adj_pruned = top_k_pruning(attacked_adj, attacked_x_np, k=10)
-            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
-            data_def_prune = pyg_from_adj_and_x(attacked_data, adj_pruned, attacked_x_np)
-        retrained_model = train_model(model_builder(), data_def_prune, epochs=120)
-        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_prune)
-        rows.append(("Defense: Pruning + Retrain", m_r, pred_r, p_r, data_def_prune, 0.0, adj_from_edge_index(data_def_prune.edge_index, data_def_prune.num_nodes)))
-        if best_pruning["metrics"] is None or m_r["accuracy"] > best_pruning["metrics"]["accuracy"]:
-            best_pruning = {"name": "Defense: Pruning + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_prune, "adj": adj_from_edge_index(data_def_prune.edge_index, data_def_prune.num_nodes), "model": retrained_model}
+            m, pred, probs = evaluate_model(model, out.data)
+            rows.append((f"Defense: {label}", m, pred, probs, out.data, 0.0, adj_from_edge_index(out.data.edge_index, out.data.num_nodes)))
 
-    if best_combined["metrics"] is None or best_combined["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
-        # Retrain on combined defense if needed.
-        if best_combined["data"] is not None:
-            data_def_combo = best_combined["data"]
-        else:
-            x_proj = ontology_feature_projection(attacked_data.x, ontology, lam=0.1)
-            x_proj_np = x_proj.detach().cpu().numpy()
-            adj_onto = ontology_reweight_adjacency(attacked_adj, ontology, lam=0.1)
-            adj_onto = _symmetrize_and_self_loop(adj_onto)
-            adj_pruned = top_k_pruning(adj_onto, x_proj_np, k=15)
-            adj_pruned = _symmetrize_and_self_loop(adj_pruned)
-            data_def_combo = pyg_from_adj_and_x(attacked_data, adj_pruned, x_proj_np)
-        retrained_model = train_model(model_builder(), data_def_combo, epochs=140)
-        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_combo)
-        rows.append(("Defense: Pruning+Ontology + Retrain", m_r, pred_r, p_r, data_def_combo, 0.0, adj_from_edge_index(data_def_combo.edge_index, data_def_combo.num_nodes)))
-        if best_combined["metrics"] is None or m_r["accuracy"] > best_combined["metrics"]["accuracy"]:
-            best_combined = {"name": "Defense: Pruning+Ontology + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_combo, "adj": adj_from_edge_index(data_def_combo.edge_index, data_def_combo.num_nodes), "model": retrained_model}
+    # 5) Combined: ontology full + top-k pruning on top of semantic projection
+    out_full = ontology_defense.defend(attacked_data, variant=DefenseVariant.FULL_ONTOLOGY, lam=0.3, prune_threshold=0.10, anomaly_repair_threshold=0.15)
+    x_proj_np = out_full.data.x.detach().cpu().numpy().astype(np.float32)
+    adj_full = _symmetrize_and_self_loop(adj_from_edge_index(out_full.data.edge_index, out_full.data.num_nodes))
+    for k in [10, 15]:
+        adj_combo = top_k_pruning(adj_full, x_proj_np, k=k)
+        adj_combo = _symmetrize_and_self_loop(adj_combo)
+        data_combo = pyg_from_adj_and_x(attacked_data, adj_combo, x_proj_np)
+        retr = train_model(model_builder(), data_combo, epochs=140)
+        m, pred, probs = evaluate_model(retr, data_combo)
+        rows.append((f"Defense: Full Ontology + Pruning (k={k}) + Retrain", m, pred, probs, data_combo, 0.0, adj_combo))
+        if best_combined["metrics"] is None or m["accuracy"] > best_combined["metrics"]["accuracy"]:
+            best_combined = {"name": f"Defense: Full Ontology + Pruning (k={k}) + Retrain", "metrics": m, "pred": pred, "probs": probs, "data": data_combo, "adj": adj_combo, "model": retr}
 
-    if best_base["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
-        data_def_retrain = attacked_data.clone()
-        data_def_retrain.x = laplacian_feature_smoothing(attacked_data.x, clean_adj, alpha=0.95)
-        retrained_model = train_model(model_builder(), data_def_retrain, epochs=160)
-        m_r, pred_r, p_r = evaluate_model(retrained_model, data_def_retrain)
-        rows.append(("Defense: Feature Smoothing + Retrain", m_r, pred_r, p_r, data_def_retrain, 0.0, clean_adj))
-        if m_r["accuracy"] > best_base["metrics"]["accuracy"]:
-            best_base = {"name": "Defense: Feature Smoothing + Retrain", "metrics": m_r, "pred": pred_r, "probs": p_r, "data": data_def_retrain, "adj": clean_adj, "model": retrained_model}
+    # 6) Adversarial training baseline (feature robustness)
+    try:
+        adv_model = adversarial_train_model(model_builder(), attacked_data.clone(), epochs=220, epsilon=0.08)
+        m, pred, probs = evaluate_model(adv_model, attacked_data)
+        rows.append(("Defense: Adversarial Training", m, pred, probs, attacked_data, 0.0, attacked_adj))
+    except Exception as e:
+        print(f"[{model_name}] Adversarial training skipped: {e}")
 
-    overall_best = best_ontology if best_ontology["metrics"]["accuracy"] > best_base["metrics"]["accuracy"] else best_base
-    if best_pruning["metrics"] is not None and best_pruning["metrics"]["accuracy"] > overall_best["metrics"]["accuracy"]:
-        overall_best = best_pruning
-    if best_combined["metrics"] is not None and best_combined["metrics"]["accuracy"] > overall_best["metrics"]["accuracy"]:
-        overall_best = best_combined
-
+    # Choose best overall for warnings
+    candidates = [c for c in [best_base, best_pruning, best_ontology, best_combined] if c["metrics"] is not None]
+    overall_best = max(candidates, key=lambda d: d["metrics"]["accuracy"]) if candidates else best_base
     print(f"[{model_name}] Best defense: {overall_best['name']} (acc={overall_best['metrics']['accuracy']:.4f})")
     if overall_best["metrics"]["accuracy"] <= attacked_metrics["accuracy"]:
         print(f"[{model_name}] WARNING: best defense did not exceed attacked accuracy ({attacked_metrics['accuracy']:.4f}).")
@@ -1222,13 +1244,13 @@ def build_dynamic_attack_payloads(data_dyn, adj_dyn, features_dyn, labels_dyn, i
     return payloads_dyn
 
 
-def main(profile="paper", clean=False):
+def main(profile="paper", clean=False, dataset_name="Cora"):
     set_seed(42)
     if clean:
         clean_results_dir("results")
     os.makedirs("results", exist_ok=True)
 
-    dataset, data = load_cora()
+    dataset, data = load_planetoid(dataset_name, root="data")
     adj_clean = adj_from_edge_index(data.edge_index, data.num_nodes)
     features_clean = data.x.cpu().numpy()
     labels = data.y.cpu().numpy()
@@ -1251,14 +1273,16 @@ def main(profile="paper", clean=False):
 
     target_node = int(idx_test[0])
 
-    # Export ontology artifacts (top-k neighbors per node + a readable example).
-    export_ontology_artifacts(features_clean, labels, target_node, out_dir="results/ontologies", top_k=5)
+    print("\n=== ONTOLOGY BUILD (OWL/RDF EXPORT) ===")
+    ontology_defense = OntologyGuidedDefense(dataset_name=dataset_name, export_dir="results/ontologies", export_owl=True)
+    ontology_artifacts = ontology_defense.fit(data)
+    export_ontology_artifacts(ontology_artifacts, data.edge_index.cpu().numpy(), out_dir=os.path.join("results", "ontologies", dataset_name), top_k=8)
 
     # Paper-style architecture diagrams (clean, explanatory block diagrams).
     draw_gcn_layerwise("results/FIG_gcn_layerwise.png")
     draw_gat_layerwise("results/FIG_gat_layerwise.png", heads=4)
 
-    print("\n=== STATIC ATTACK SUITE (CORA) ===")
+    print(f"\n=== STATIC ATTACK SUITE ({dataset_name.upper()}) ===")
     payloads_static = []
 
     def make_random_poison(budget):
@@ -1288,9 +1312,10 @@ def main(profile="paper", clean=False):
     def make_nettack(budget):
         surrogate = get_surrogate(adj_clean, features_clean, labels, idx_train)
         adj_net = adj_clean.copy()
-        per_node = max(6, int(budget / 8))
+        # Increase intensity so the effect is visible in node classification.
+        per_node = max(8, int(budget / 4))
         nettack_score = []
-        for t in idx_test[:8]:
+        for t in idx_test[:20]:
             adj_net, _, info = run_nettack(surrogate, adj_net, features_clean, labels, int(t), n_perturbations=per_node)
             nettack_score.append(info["perturbation_score_proxy"])
         print(f"Nettack perturbation-score proxy (avg): {float(np.mean(nettack_score)):.4f}")
@@ -1302,10 +1327,10 @@ def main(profile="paper", clean=False):
             "name": "Poisoning: Nettack",
             "type": "poison",
             "data": None,
-            "budget": 48,
+            "budget": 72,
             "p_rate": 0.0,
             "adj": adj_clean,
-            "budgets": [32, 48, 64],
+            "budgets": [48, 72, 96],
             "make_data": make_nettack,
         }
     )
@@ -1393,6 +1418,43 @@ def main(profile="paper", clean=False):
     payloads_gcn = [p.copy() for p in payloads_static]
     payloads_gat = [p.copy() for p in payloads_static]
 
+    # Adaptive semantic evasion attack (ontology-aware): crafts plausible feature edits that aim to bypass pruning.
+    def make_adaptive_semantic_attack_for(probs_tensor, budget):
+        attacker = AdaptiveSemanticAttack()
+        # Override flip budget per node for this run.
+        attacker.cfg = type(attacker.cfg)(
+            flips_per_node=max(6, int(budget)),
+            remove_per_node=3,
+            cooccur_weight=0.2,
+            contradiction_block=True,
+            seed=42,
+        )
+        data_sem, debug = attacker.apply(data, ontology_artifacts, probs=probs_tensor, nodes=idx_test[:160])
+        return data_sem, perturbation_rate(data.x.cpu().numpy(), data_sem.x.cpu().numpy()), {"debug": debug}
+
+    payloads_gcn.append(
+        {
+            "name": "Evasion: Adaptive Semantic",
+            "type": "evasion",
+            "data": None,
+            "budget": 10,
+            "p_rate": 0.0,
+            "budgets": [8, 10, 14],
+            "make_data": lambda b: make_adaptive_semantic_attack_for(gcn_probs, b),
+        }
+    )
+    payloads_gat.append(
+        {
+            "name": "Evasion: Adaptive Semantic",
+            "type": "evasion",
+            "data": None,
+            "budget": 10,
+            "p_rate": 0.0,
+            "budgets": [8, 10, 14],
+            "make_data": lambda b: make_adaptive_semantic_attack_for(gat_probs, b),
+        }
+    )
+
     gcn_builder = lambda: GCN(dataset.num_features, 16, dataset.num_classes)
     gat_builder = lambda: GAT(dataset.num_features, 8, dataset.num_classes, heads=4)
     gcn_df, gcn_preds, gcn_prob = evaluate_model_under_attacks("GCN", gcn, gcn_builder, data, payloads_gcn, poison_epochs=120)
@@ -1472,6 +1534,7 @@ def main(profile="paper", clean=False):
         worst_data,
         gcn,
         gcn_builder,
+        ontology_defense,
         model_name="GCN-Static",
     )
     # For visualization, prefer the combined defense, then ontology, then pruning, then base smoothing.
@@ -1528,6 +1591,7 @@ def main(profile="paper", clean=False):
         worst_data,
         gat,
         gat_builder,
+        ontology_defense,
         model_name="GAT-Static",
     )
     for best_def in [best_base_gat, best_pruning_gat, best_ontology_gat, best_combined_gat]:
@@ -1623,6 +1687,53 @@ def main(profile="paper", clean=False):
     pre_all.to_csv("results/FINAL_TABLE_PRE_DEFENSE.csv", index=False)
     post_all.to_csv("results/FINAL_TABLE_POST_DEFENSE.csv", index=False)
 
+    # -------- Semantic ablation + defense benchmark exports for paper --------
+    def _best_acc(def_rows, key_substr):
+        best = None
+        for (name, m, *_rest) in def_rows:
+            if key_substr in str(name):
+                acc = float(m.get("accuracy", 0.0))
+                if best is None or acc > best:
+                    best = acc
+        return best
+
+    ablation_variants = [
+        ("Co-occurrence only", "Ontology: Co-occurrence only"),
+        ("Label affinity only", "Ontology: Label affinity only"),
+        ("OWL rules only", "Ontology: OWL rules only"),
+        ("Semantic projection only", "Ontology: Semantic projection only"),
+        ("Full ontology", "Ontology: Full"),
+    ]
+    ab_rows = []
+    for vname, key in ablation_variants:
+        ab_rows.append(
+            {
+                "Variant": vname,
+                "GCN_Accuracy": _best_acc(defense_rows, key),
+                "GAT_Accuracy": _best_acc(defense_rows_gat, key),
+            }
+        )
+    pd.DataFrame(ab_rows).to_csv("results/SEMANTIC_ABLATION.csv", index=False)
+
+    bench = [
+        ("Smoothing", "Defense: Smoothing"),
+        ("GNNGuard", "GNNGuard-like"),
+        ("GNN-SVD", "GNN-SVD"),
+        ("Adversarial training", "Adversarial Training"),
+        ("Your ontology", "Ontology: Full"),
+        ("Combined", "Full Ontology + Pruning"),
+    ]
+    b_rows = []
+    for dname, key in bench:
+        b_rows.append(
+            {
+                "Defense": dname,
+                "GCN": _best_acc(defense_rows, key),
+                "GAT": _best_acc(defense_rows_gat, key),
+            }
+        )
+    pd.DataFrame(b_rows).to_csv("results/DEFENSE_BENCHMARK.csv", index=False)
+
     cols = ["Model", "Attack", "Accuracy", "Macro F1", "ROC-AUC", "Accuracy Drop", "Perturbation Budget"]
     def _fmt_terminal(df):
         out = df.copy()
@@ -1668,6 +1779,134 @@ def main(profile="paper", clean=False):
     terminal_log.append(post_all[cols].to_csv(index=False))
     Path("results/metrics_terminal.txt").write_text("\n".join(terminal_log) + "\n", encoding="utf-8")
 
+    # -------- Ontology bridge: export a compact CSV for OWL conversion --------
+    # This file is intentionally minimal and stable: it can be converted into OWL
+    # (Protégé-friendly) via `ontology/csv_to_owl_reasoner.py`.
+    run_rows = []
+    rid = 1
+
+    def _attack_type(name: str) -> str:
+        n = str(name)
+        if n == "Baseline":
+            return "none"
+        if n.startswith("Poison"):
+            return "poisoning"
+        if n.startswith("Evasion"):
+            return "evasion"
+        return "unknown"
+
+    def _pick(series, key, default=0.0):
+        try:
+            return float(series.get(key, default))
+        except Exception:
+            return float(default)
+
+    for model in ["GCN", "GAT"]:
+        base_row = pre_all[(pre_all["Model"] == model) & (pre_all["Attack"] == "Baseline")].iloc[0]
+        base_acc = _pick(base_row, "Accuracy", 0.0)
+        base_f1 = _pick(base_row, "Macro F1", 0.0)
+        base_auc = _pick(base_row, "ROC-AUC", 0.0)
+
+        # Baseline "run" (so the ontology has an anchor per model).
+        run_rows.append(
+            {
+                "run_id": rid,
+                "dataset": dataset_name,
+                "model": model,
+                "attack": "Baseline",
+                "attack_type": "none",
+                "defense": "",
+                "accuracy_before": base_acc,
+                "accuracy_after_attack": base_acc,
+                "accuracy_after_defense": base_acc,
+                "severity_score": 0.0,
+                "f1_macro_before": base_f1,
+                "f1_macro_after_attack": base_f1,
+                "f1_macro_after_defense": base_f1,
+                "roc_auc_before": base_auc,
+                "roc_auc_after_attack": base_auc,
+                "roc_auc_after_defense": base_auc,
+            }
+        )
+        rid += 1
+
+        # Each attack (no defense applied).
+        model_attacks = pre_all[(pre_all["Model"] == model) & (pre_all["Attack"] != "Baseline")]
+        for _, ar in model_attacks.iterrows():
+            aname = str(ar["Attack"])
+            a_acc = _pick(ar, "Accuracy", base_acc)
+            a_f1 = _pick(ar, "Macro F1", base_f1)
+            a_auc = _pick(ar, "ROC-AUC", base_auc)
+            run_rows.append(
+                {
+                    "run_id": rid,
+                    "dataset": dataset_name,
+                    "model": model,
+                    "attack": aname,
+                    "attack_type": _attack_type(aname),
+                    "defense": "",
+                    "accuracy_before": base_acc,
+                    "accuracy_after_attack": a_acc,
+                    "accuracy_after_defense": a_acc,  # no defense on non-worst attacks
+                    "severity_score": max(0.0, base_acc - a_acc),
+                    "f1_macro_before": base_f1,
+                    "f1_macro_after_attack": a_f1,
+                    "f1_macro_after_defense": a_f1,
+                    "roc_auc_before": base_auc,
+                    "roc_auc_after_attack": a_auc,
+                    "roc_auc_after_defense": a_auc,
+                }
+            )
+            rid += 1
+
+        # Worst-attack defense variants (per model).
+        if worst_attack_name in list(pre_all[pre_all["Model"] == model]["Attack"].astype(str).values):
+            attacked_row = pre_all[(pre_all["Model"] == model) & (pre_all["Attack"] == worst_attack_name)].iloc[0]
+            attacked_acc = _pick(attacked_row, "Accuracy", base_acc)
+            attacked_f1 = _pick(attacked_row, "Macro F1", base_f1)
+            attacked_auc = _pick(attacked_row, "ROC-AUC", base_auc)
+
+            def_rows = post_all[(post_all["Model"] == model) & (post_all["Attack"].astype(str).str.contains("Defense|Ontology|Pruning|Smoothing|GNN", na=False))]
+            for _, dr in def_rows.iterrows():
+                dname = str(dr["Attack"])
+                d_acc = _pick(dr, "Accuracy", attacked_acc)
+                d_f1 = _pick(dr, "Macro F1", attacked_f1)
+                d_auc = _pick(dr, "ROC-AUC", attacked_auc)
+                run_rows.append(
+                    {
+                        "run_id": rid,
+                        "dataset": dataset_name,
+                        "model": model,
+                        "attack": worst_attack_name,
+                        "attack_type": _attack_type(worst_attack_name),
+                        "defense": dname,
+                        "accuracy_before": base_acc,
+                        "accuracy_after_attack": attacked_acc,
+                        "accuracy_after_defense": d_acc,
+                        "severity_score": max(0.0, base_acc - attacked_acc),
+                        "f1_macro_before": base_f1,
+                        "f1_macro_after_attack": attacked_f1,
+                        "f1_macro_after_defense": d_f1,
+                        "roc_auc_before": base_auc,
+                        "roc_auc_after_attack": attacked_auc,
+                        "roc_auc_after_defense": d_auc,
+                    }
+                )
+                rid += 1
+
+    attack_results_path = "results/attack_results.csv"
+    pd.DataFrame(run_rows).to_csv(attack_results_path, index=False)
+
+    # Convert CSV -> OWL for Protégé.
+    try:
+        generate_reasoned_ontology(
+            csv_path=attack_results_path,
+            base_owl_path="ontology/gnn_attacks_ontology_starter.owl",
+            out_owl_path="ontology/gnn_attack_reasoned.owl",
+        )
+    except Exception as e:
+        print(f"[WARN] Ontology CSV->OWL export failed: {e}")
+
     # -------- Paper figures (minimal, paper-style) --------
     # Build attacked/defended adjacencies for worst-attack graph diff.
     adj_attacked = adj_from_edge_index(worst_data.edge_index, worst_data.num_nodes) if worst_data is not None else adj_clean
@@ -1678,6 +1917,27 @@ def main(profile="paper", clean=False):
         attacked_nodes = changed_nodes_from_adj(adj_clean, adj_attacked)
     defended_nodes = changed_feature_nodes(worst_data.x, defended_data.x) if (worst_data is not None and defended_data is not None) else attacked_nodes
 
+    # Prediction-change nodes for a clear node-classification effect in the graph visuals.
+    pred_clean = gcn_preds.get("Baseline")
+    pred_att = gcn_preds.get(worst_attack_name)
+    pred_def = defended_pred
+    y_np = data.y.cpu().numpy()
+
+    attacked_pred_changed = []
+    attacked_newly_wrong = []
+    defended_pred_changed = []
+    defended_still_wrong = []
+    if pred_clean is not None and pred_att is not None:
+        pc = pred_clean.cpu().numpy()
+        pa = pred_att.cpu().numpy()
+        attacked_pred_changed = np.where(pc != pa)[0].tolist()
+        attacked_newly_wrong = np.where((pc == y_np) & (pa != y_np))[0].tolist()
+    if pred_clean is not None and pred_def is not None:
+        pc = pred_clean.cpu().numpy()
+        pred_def_np = pred_def.cpu().numpy()
+        defended_pred_changed = np.where(pc != pred_def_np)[0].tolist()
+        defended_still_wrong = np.where(pred_def_np != y_np)[0].tolist()
+
     visualize_graph_mosaic(
         adj_clean,
         adj_attacked,
@@ -1686,6 +1946,10 @@ def main(profile="paper", clean=False):
         target_node=target_node,
         attacked_nodes=attacked_nodes,
         defended_nodes=defended_nodes,
+        attacked_pred_changed=attacked_pred_changed,
+        defended_pred_changed=defended_pred_changed,
+        attacked_newly_wrong=attacked_newly_wrong,
+        defended_still_wrong=defended_still_wrong,
         attack_name=worst_attack_name,
         defense_name=str(defended_name),
         hop_k=2,
@@ -1693,11 +1957,49 @@ def main(profile="paper", clean=False):
         save_path="results/FIG_graph_diff_worst.png",
     )
 
+    # Also export 3 separate aligned images (clean / attacked / defended).
+    visualize_triplet_separate(
+        adj_clean,
+        adj_attacked,
+        adj_defended,
+        labels,
+        target_node=target_node,
+        attacked_nodes=attacked_nodes,
+        defended_nodes=defended_nodes,
+        attacked_pred_changed=attacked_pred_changed,
+        defended_pred_changed=defended_pred_changed,
+        attacked_newly_wrong=attacked_newly_wrong,
+        defended_still_wrong=defended_still_wrong,
+        attack_name=worst_attack_name,
+        defense_name=str(defended_name),
+        hop_k=2,
+        max_nodes=260,
+        out_dir="results",
+        prefix="worst",
+    )
+
+    # -------- Graph metrics (clean vs attacked vs defended) --------
+    gm_rows = []
+    for gname, adj_ in [("Clean", adj_clean), ("Attacked", adj_attacked), ("Defended", adj_defended)]:
+        m = compute_graph_metrics(adj_, labels)
+        gm_rows.append(
+            {
+                "Graph": gname,
+                "Density": float(m.get("density", 0.0)),
+                "Modularity": float(m.get("modularity", 0.0)),
+                "Conductance": float(m.get("conductance", 0.0)),
+                "Homophily": float(m.get("homophily", 0.0)),
+                "AvgDegree": float(m.get("avg_degree", 0.0)),
+                "NumEdges": float(m.get("num_edges", 0.0)),
+            }
+        )
+    pd.DataFrame(gm_rows).to_csv("results/graph_metrics_static.csv", index=False)
+
     # Attach attacked-nodes metadata for feature attacks so the suite figure is informative.
     for p in payloads_gcn:
         if p.get("data") is None:
             continue
-        if "Feature" in p["name"] or "Gradient" in p["name"]:
+        if "Feature" in p["name"] or "Gradient" in p["name"] or "Adaptive Semantic" in p["name"]:
             p["attacked_nodes"] = changed_feature_nodes(data.x, p["data"].x)
         else:
             p["attacked_nodes"] = []
@@ -1744,6 +2046,30 @@ def main(profile="paper", clean=False):
     snapshot_dir = "data/dynamic"
     save_dynamic_snapshots(generator, snapshots=4, save_dir=snapshot_dir)
     # Snapshots are saved to disk for your submission requirements; no need to load/evaluate here.
+    # Still export dynamic structural metrics for the report (snapshot-by-snapshot).
+    dyn_rows = []
+    for t in range(4):
+        p = os.path.join(snapshot_dir, f"dynamic_snapshot_t{t}.pt")
+        try:
+            d = torch.load(p)
+            adj_t = adj_from_edge_index(d.edge_index, d.num_nodes)
+            # Use labels if present; dynamic generator produces y.
+            y_t = d.y.cpu().numpy() if hasattr(d, "y") else np.zeros((d.num_nodes,), dtype=np.int64)
+            m = compute_graph_metrics(adj_t, y_t)
+            dyn_rows.append(
+                {
+                    "Snapshot": f"t{t}",
+                    "Density": float(m.get("density", 0.0)),
+                    "Modularity": float(m.get("modularity", 0.0)),
+                    "Conductance": float(m.get("conductance", 0.0)),
+                    "Homophily": float(m.get("homophily", 0.0)),
+                    "AvgDegree": float(m.get("avg_degree", 0.0)),
+                }
+            )
+        except Exception:
+            continue
+    if dyn_rows:
+        pd.DataFrame(dyn_rows).to_csv("results/graph_metrics_dynamic.csv", index=False)
 
     # -------- Explanation / output guide --------
     dataset_stats = {
@@ -1772,6 +2098,8 @@ def main(profile="paper", clean=False):
     for p in [
         "FINAL_TABLE_PRE_DEFENSE.csv",
         "FINAL_TABLE_POST_DEFENSE.csv",
+        "SEMANTIC_ABLATION.csv",
+        "DEFENSE_BENCHMARK.csv",
         "metrics_terminal.txt",
         "EXPLANATION.md",
         "FIG_workflow.png",
@@ -1781,20 +2109,31 @@ def main(profile="paper", clean=False):
         "FIG_clean_graph.png",
         "FIG_attack_suite.png",
         "FIG_graph_diff_worst.png",
+        "FIG_worst_clean.png",
+        "FIG_worst_attacked.png",
+        "FIG_worst_defended.png",
         "FIG_class_clusters.png",
-        "ontologies/ontology_topk_edges.csv",
-        "ontologies/ontology_examples.md",
-        "ontologies/ontology_summary.md",
+        "graph_metrics_static.csv",
+        "graph_metrics_dynamic.csv",
+        f"ontologies/{dataset_name}/ontology.owl",
+        f"ontologies/{dataset_name}/ontology.rdf",
+        f"ontologies/{dataset_name}/ontology.ttl",
+        f"ontologies/{dataset_name}/ontology.swrl",
+        f"ontologies/{dataset_name}/ontology_feature_to_topic.csv",
+        f"ontologies/{dataset_name}/ontology_topic_hierarchy.csv",
+        f"ontologies/{dataset_name}/ontology_contradictions.csv",
+        f"ontologies/{dataset_name}/ontology_edge_trust_topk.csv",
     ]:
         print(f"- {p}")
 
     print("\nRun command:")
-    print("python3 main.py --clean --profile paper")
+    print(f"python3 main.py --clean --profile paper --dataset {dataset_name}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Adversarial Attacks on GNNs (GCN/GAT) with defenses and paper-style outputs.")
     parser.add_argument("--profile", default="paper", choices=["paper"], help="Output profile. 'paper' generates only the required final tables + paper figures.")
     parser.add_argument("--clean", action="store_true", help="Delete all existing files under results/ before running.")
+    parser.add_argument("--dataset", default="Cora", choices=["Cora", "Citeseer", "PubMed"], help="Static dataset to run: Cora, Citeseer, PubMed.")
     args = parser.parse_args()
-    main(profile=args.profile, clean=args.clean)
+    main(profile=args.profile, clean=args.clean, dataset_name=args.dataset)

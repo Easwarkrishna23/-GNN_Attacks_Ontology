@@ -1,0 +1,19 @@
+\begin{table}[t]
+\centering
+\small
+\begin{tabular}{lll}
+\toprule
+Defense & GCN & GAT \\
+\midrule
+Smoothing & 0.004 & 0.040 \\
+GNNGuard & 0.002 & 0.042 \\
+GNN-SVD & 0.008 & 0.080 \\
+Adversarial training & 0.953 & 0.935 \\
+Your ontology & 0.852 & 0.812 \\
+Combined & 0.895 & 0.840 \\
+\bottomrule
+\end{tabular}
+
+\caption{Defense benchmark comparison across GCN and GAT (best variant per defense).}
+\label{tab:defense_benchmark}
+\end{table}

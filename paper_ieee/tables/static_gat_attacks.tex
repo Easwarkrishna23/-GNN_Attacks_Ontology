@@ -1,20 +1,21 @@
 \begin{table*}[t]
 \centering
 \small
-\begin{tabular}{llllllll}
+\begin{tabular}{llllll}
 \toprule
-Attack & Accuracy & F1 & ROC-AUC & Attack Success Rate & Robustness Score & Perturbation Budget & Accuracy Drop \\
+Attack & Accuracy & Macro F1 & ROC-AUC & Perturbation Budget & Accuracy Drop \\
 \midrule
-Baseline & 0.818 & 0.813 & 0.972 & 0.000 & 1.000 & 0.000 & 0.000 \\
-Poisoning: Random Structure & 0.505 & 0.512 & 0.826 & 0.383 & 0.617 & 1500.000 & 0.313 \\
-Poisoning: Nettack & 0.811 & 0.805 & 0.966 & 0.009 & 0.991 & 128.000 & 0.007 \\
-Poisoning: Meta Attack & 0.815 & 0.807 & 0.969 & 0.004 & 0.996 & 4000.000 & 0.003 \\
-Evasion: Edge Flip & 0.806 & 0.799 & 0.969 & 0.015 & 0.985 & 120.000 & 0.012 \\
-Evasion: Feature & 0.755 & 0.746 & 0.940 & 0.077 & 0.923 & 12.000 & 0.063 \\
-Evasion: Gradient (FGSM-like) & 0.002 & 0.002 & 0.025 & 0.998 & 0.002 & 0.080 & 0.816 \\
+Baseline & 0.805 & 0.792 & 0.967 & 0.000 & 0.000 \\
+Poisoning: Random Structure & 0.558 & 0.567 & 0.834 & 800.000 & 0.247 \\
+Poisoning: Nettack & 0.777 & 0.775 & 0.964 & 48.000 & 0.028 \\
+Poisoning: Meta Attack & 0.798 & 0.795 & 0.962 & 800.000 & 0.007 \\
+Evasion: Edge Flip & 0.784 & 0.770 & 0.958 & 120.000 & 0.021 \\
+Evasion: Feature & 0.580 & 0.564 & 0.787 & 18.000 & 0.225 \\
+Evasion: Gradient (FGSM-like) & 0.043 & 0.019 & 0.087 & 0.100 & 0.762 \\
+Evasion: Adaptive Semantic & 0.535 & 0.504 & 0.706 & 8.000 & 0.270 \\
 \bottomrule
 \end{tabular}
 
-\caption{Static (Cora) attack suite results for GAT (before defenses).}
+\caption{Static (Planetoid) attack suite results for GAT (before defenses).}
 \label{tab:static_gat_attacks}
 \end{table*}

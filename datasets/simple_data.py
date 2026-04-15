@@ -14,10 +14,13 @@ class GraphData:
     (which may fail on some environments due to binary extension mismatches).
     """
 
-    def __init__(self, x, y, edge_index, train_mask, val_mask, test_mask):
+    def __init__(self, x, y, edge_index, train_mask, val_mask, test_mask, edge_weight=None):
         self.x = x
         self.y = y
         self.edge_index = edge_index
+        # Optional per-edge weights aligned with edge_index columns.
+        # When None, edges are treated as weight=1.
+        self.edge_weight = edge_weight
         self.train_mask = train_mask
         self.val_mask = val_mask
         self.test_mask = test_mask
@@ -32,6 +35,7 @@ class GraphData:
             x=self.x.clone(),
             y=self.y.clone(),
             edge_index=self.edge_index.clone(),
+            edge_weight=None if self.edge_weight is None else self.edge_weight.clone(),
             train_mask=self.train_mask.clone(),
             val_mask=self.val_mask.clone(),
             test_mask=self.test_mask.clone(),
@@ -41,8 +45,9 @@ class GraphData:
         self.x = self.x.to(device)
         self.y = self.y.to(device)
         self.edge_index = self.edge_index.to(device)
+        if self.edge_weight is not None:
+            self.edge_weight = self.edge_weight.to(device)
         self.train_mask = self.train_mask.to(device)
         self.val_mask = self.val_mask.to(device)
         self.test_mask = self.test_mask.to(device)
         return self
-

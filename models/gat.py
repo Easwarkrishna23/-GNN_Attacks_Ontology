@@ -54,13 +54,20 @@ class GAT(nn.Module):
         sum_per_dst.scatter_add_(0, dst, exp_e)
         return exp_e / (sum_per_dst[dst] + 1e-12)
 
-    def _attn_layer(self, x, edge_index, W, a, bias, heads, out_dim, concat=True):
-        # x: (N, Fin), edge_index: (2, E)
+    def _attn_layer(self, x, edge_index, W, a, bias, heads, out_dim, concat=True, edge_weight=None):
+        # x: (N, Fin), edge_index: (2, E), edge_weight: (E,) optional trust weights
         N = x.size(0)
         x = F.dropout(x, p=self.dropout, training=self.training)
         h = W(x)  # (N, heads*out_dim)
         h = h.view(N, heads, out_dim)  # (N, heads, out_dim)
 
+        # Ensure self-loops; extend weights accordingly.
+        if edge_weight is not None:
+            ew = edge_weight
+            if ew.dim() != 1 or ew.numel() != edge_index.size(1):
+                raise ValueError("edge_weight must be shape (E,) aligned with edge_index.")
+            loop_w = torch.ones((N,), device=ew.device, dtype=ew.dtype)
+            edge_weight = torch.cat([ew, loop_w], dim=0)
         edge_index = _ensure_self_loops(edge_index, N)
         src = edge_index[0]
         dst = edge_index[1]
@@ -71,6 +78,11 @@ class GAT(nn.Module):
         # a: (heads, 2*out_dim)
         e = (cat * a.unsqueeze(0)).sum(dim=-1)  # (E, heads)
         e = F.leaky_relu(e, negative_slope=self.negative_slope)
+
+        # Semantic edge trust: incorporate as an additive log-prior before softmax.
+        # This preserves the attention normalization while down-weighting untrusted edges.
+        if edge_weight is not None:
+            e = e + torch.log(edge_weight.clamp_min(1e-12)).unsqueeze(1)
 
         # softmax per dst node for each head (loop heads; small graph)
         alphas = []
@@ -91,6 +103,7 @@ class GAT(nn.Module):
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
+        edge_weight = getattr(data, "edge_weight", None)
         h1, _ = self._attn_layer(
             x,
             edge_index,
@@ -100,6 +113,7 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
+            edge_weight=edge_weight,
         )
         h1 = F.elu(h1)
         logits, _ = self._attn_layer(
@@ -111,11 +125,13 @@ class GAT(nn.Module):
             heads=1,
             out_dim=self.W2.out_features,
             concat=False,
+            edge_weight=edge_weight,
         )
         return F.log_softmax(logits, dim=1)
 
     def forward_with_debug(self, data):
         x, edge_index = data.x, data.edge_index
+        edge_weight = getattr(data, "edge_weight", None)
 
         def mem_mb(tensor):
             return float((tensor.numel() * tensor.element_size()) / (1024**2))
@@ -129,6 +145,7 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
+            edge_weight=edge_weight,
         )
         h1_act = F.elu(h1)
         logits, (ei2, alpha2) = self._attn_layer(
@@ -140,6 +157,7 @@ class GAT(nn.Module):
             heads=1,
             out_dim=self.W2.out_features,
             concat=False,
+            edge_weight=edge_weight,
         )
         probs = torch.softmax(logits, dim=1)
         preds = probs.argmax(dim=1)
@@ -168,6 +186,7 @@ class GAT(nn.Module):
 
     def get_embeddings(self, data):
         x, edge_index = data.x, data.edge_index
+        edge_weight = getattr(data, "edge_weight", None)
         h1, _ = self._attn_layer(
             x,
             edge_index,
@@ -177,11 +196,13 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
+            edge_weight=edge_weight,
         )
         return F.elu(h1)
 
     def get_attention_weights(self, data):
         x, edge_index = data.x, data.edge_index
+        edge_weight = getattr(data, "edge_weight", None)
         _, (ei, alpha) = self._attn_layer(
             x,
             edge_index,
@@ -191,6 +212,6 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
+            edge_weight=edge_weight,
         )
         return ei, alpha
-
