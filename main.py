@@ -5,13 +5,17 @@ import numpy as np
 import pandas as pd
 import scipy.sparse as sp
 import torch
+
+# Avoid Matplotlib cache permission warnings in some environments.
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/mplconfig_gnn_attacks")
+os.makedirs(os.environ["MPLCONFIGDIR"], exist_ok=True)
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 import networkx as nx
 from pathlib import Path
 from matplotlib.patches import FancyBboxPatch, FancyArrowPatch, Circle
-from tabulate import tabulate
+import re
 
 from datasets.planetoid_loader import load_planetoid
 from datasets.dynamic_graph import DynamicGraphGenerator
@@ -60,6 +64,38 @@ def clean_results_dir(path="results"):
     Delete all previously generated outputs under results/.
     User explicitly requested a clean rerun before generating fresh results.
     """
+
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(s: str) -> str:
+    return _ANSI_RE.sub("", str(s))
+
+
+def render_markdown_table(df: pd.DataFrame) -> str:
+    """
+    Render a GitHub-flavored markdown table without requiring `tabulate`.
+    Handles ANSI bold sequences by ignoring them for width computation.
+    """
+    cols = list(df.columns)
+    rows = [[str(df.iloc[i][c]) for c in cols] for i in range(len(df))]
+
+    widths = []
+    for j, c in enumerate(cols):
+        maxw = len(_strip_ansi(c))
+        for r in rows:
+            maxw = max(maxw, len(_strip_ansi(r[j])))
+        widths.append(maxw)
+
+    def pad(val: str, w: int) -> str:
+        vis = len(_strip_ansi(val))
+        return val + (" " * max(0, w - vis))
+
+    header = "| " + " | ".join(pad(c, widths[i]) for i, c in enumerate(cols)) + " |"
+    sep = "| " + " | ".join("-" * widths[i] for i in range(len(cols))) + " |"
+    body = ["| " + " | ".join(pad(r[i], widths[i]) for i in range(len(cols))) + " |" for r in rows]
+    return "\n".join([header, sep] + body)
     p = Path(path)
     if not p.exists():
         p.mkdir(parents=True, exist_ok=True)
@@ -1765,8 +1801,8 @@ def main(profile="paper", clean=False, dataset_name="Cora"):
             for c in ["Attack", "Accuracy", "Accuracy Drop"]:
                 post_disp.loc[i, c] = bold(f"{post_disp.loc[i, c]}")
 
-    pre_table_txt = tabulate(pre_disp, headers="keys", tablefmt="github", showindex=False)
-    post_table_txt = tabulate(post_disp, headers="keys", tablefmt="github", showindex=False)
+    pre_table_txt = render_markdown_table(pre_disp)
+    post_table_txt = render_markdown_table(post_disp)
 
     print("\nFINAL TABLE (PRE-DEFENSE)")
     print(pre_table_txt)
