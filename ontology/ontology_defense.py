@@ -93,8 +93,9 @@ class OntologyGuidedDefense:
         X = data.x.detach().cpu().numpy().astype(np.float32)
         y = data.y.detach().cpu().numpy().astype(np.int64)
         train_mask = data.train_mask.detach().cpu().numpy().astype(bool)
+        edge_index = data.edge_index.detach().cpu().numpy().astype(np.int64)
 
-        artifacts = self.builder.build(X, y, train_mask, class_names=class_names)
+        artifacts = self.builder.build(X, y, train_mask, edge_index=edge_index, class_names=class_names)
         self.artifacts = artifacts
 
         if self.export_owl:

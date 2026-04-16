@@ -36,6 +36,7 @@ from defenses.gnnguard_paper_defense import apply_gnnguard_paper_defense, PaperD
 from ontology.ontology_defense import OntologyGuidedDefense, DefenseVariant
 from ontology.ontology_builder import OntologyBuilder
 from ontology.csv_to_owl_reasoner import generate_reasoned_ontology
+import json
 from utils.metrics import compute_robustness_metrics, perturbation_rate, compute_graph_metrics
 from visualization.graph_viz import visualize_graph_mosaic, visualize_graph_pair, visualize_attack_suite, visualize_triplet_separate
 from visualization.plotting import (
@@ -96,6 +97,132 @@ def render_markdown_table(df: pd.DataFrame) -> str:
     sep = "| " + " | ".join("-" * widths[i] for i in range(len(cols))) + " |"
     body = ["| " + " | ".join(pad(r[i], widths[i]) for i in range(len(cols))) + " |" for r in rows]
     return "\n".join([header, sep] + body)
+
+
+def export_cora_semantic_snapshot(
+    data,
+    artifacts,
+    dataset_name: str,
+    out_path: str = "results/ontology_graph_snapshot.json",
+    max_top_features: int = 10,
+):
+    """
+    Export a Cora-specific semantic snapshot to JSON for OWL population.
+
+    This is designed to satisfy the requirements:
+    - Papers, Topics, CitationEdges, FeatureVectors, ClassLabels
+    - Graph topology semantics + vulnerability modeling
+    - Edge trust signals (cosine/jaccard/topic mismatch)
+    """
+    X = data.x.detach().cpu().numpy().astype(np.float32)
+    y = data.y.detach().cpu().numpy().astype(np.int64)
+    ei = data.edge_index.detach().cpu().numpy().astype(np.int64)
+    N = int(data.num_nodes)
+
+    class_names = list(getattr(artifacts, "class_names", []))
+    if not class_names:
+        class_names = [f"Topic_{i}" for i in range(int(np.max(y) + 1))]
+
+    # Node-level semantics (degree/homophily/entropy/vulnerabilities)
+    deg = getattr(artifacts, "node_degree", np.zeros((N,), dtype=np.float32)).astype(float)
+    pr = getattr(artifacts, "node_pagerank", np.zeros((N,), dtype=np.float32)).astype(float)
+    hom = getattr(artifacts, "node_local_homophily", np.zeros((N,), dtype=np.float32)).astype(float)
+    ent = getattr(artifacts, "node_neighbor_entropy", np.zeros((N,), dtype=np.float32)).astype(float)
+    mm = getattr(artifacts, "node_topic_mismatch_frac", np.zeros((N,), dtype=np.float32)).astype(float)
+    vul = getattr(artifacts, "vulnerability_scores", {}) or {}
+
+    papers = []
+    for i in range(N):
+        nz = np.where(X[i] > 0)[0]
+        topf = nz[:max_top_features].tolist()
+        vlist = []
+        for vname, arr in vul.items():
+            try:
+                score = float(arr[i])
+            except Exception:
+                continue
+            if score >= 0.25:
+                vlist.append({"type": str(vname), "score": score})
+        # Ensure every paper has at least one vulnerability relation (even if weak),
+        # so the ontology contains object+data semantics for every datapoint.
+        if not vlist and vul:
+            best_v = None
+            best_s = -1.0
+            for vname, arr in vul.items():
+                try:
+                    score = float(arr[i])
+                except Exception:
+                    continue
+                if score > best_s:
+                    best_s = score
+                    best_v = str(vname)
+            if best_v is not None:
+                vlist.append({"type": best_v, "score": float(best_s)})
+        topic = class_names[int(y[i])] if int(y[i]) < len(class_names) else f"Topic_{int(y[i])}"
+        papers.append(
+            {
+                "id": int(i),
+                "label": int(y[i]),
+                "topic": topic,
+                "degree": float(deg[i]),
+                "pagerank": float(pr[i]),
+                "local_homophily": float(hom[i]),
+                "neighbor_entropy": float(ent[i]),
+                "topic_mismatch_frac": float(mm[i]),
+                "top_feature_ids": topf,
+                "vulnerabilities": vlist,
+            }
+        )
+
+    # Edge-level semantics: cosine + jaccard over BoW and topic mismatch.
+    src = ei[0]
+    dst = ei[1]
+    xs = X[src]
+    xd = X[dst]
+    # cosine
+    num = np.sum(xs * xd, axis=1)
+    den = (np.linalg.norm(xs, axis=1) * np.linalg.norm(xd, axis=1)) + 1e-12
+    cos = (num / den).astype(np.float32)
+    cos = np.clip(cos, 0.0, 1.0)
+    # jaccard on presence
+    ps = xs > 0
+    pd = xd > 0
+    inter = np.sum(ps & pd, axis=1).astype(np.float32)
+    union = np.sum(ps | pd, axis=1).astype(np.float32)
+    union[union == 0] = 1.0
+    jac = (inter / union).astype(np.float32)
+    topic_mismatch = (y[src] != y[dst])
+
+    edges = []
+    for k in range(src.size):
+        trust = float(0.5 * cos[k] + 0.5 * jac[k])
+        suspicious = bool(topic_mismatch[k] and (cos[k] < 0.10 or jac[k] < 0.02))
+        edges.append(
+            {
+                "src": int(src[k]),
+                "dst": int(dst[k]),
+                "cosine": float(cos[k]),
+                "jaccard": float(jac[k]),
+                "topicSimilarity": float(1.0 - float(topic_mismatch[k])),
+                "citationTrust": trust,
+                "topic_mismatch": bool(topic_mismatch[k]),
+                "bridge_edge": bool(topic_mismatch[k]),
+                "suspicious": suspicious,
+                "suspicious_reason": "topic_mismatch_low_similarity" if suspicious else "",
+            }
+        )
+
+    out = {
+        "dataset": dataset_name,
+        "num_nodes": N,
+        "num_edges": int(src.size),
+        "topics": class_names,
+        "papers": papers,
+        "edges": edges,
+    }
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    Path(out_path).write_text(json.dumps(out, indent=2), encoding="utf-8")
+    return out_path
     p = Path(path)
     if not p.exists():
         p.mkdir(parents=True, exist_ok=True)
@@ -1099,10 +1226,28 @@ def apply_feature_defenses(
         for beta in [0.4, 0.6, 0.8]:
             for tau in [0.03, 0.05, 0.08]:
                 params = PaperDefenseParams(prune_threshold=float(tau), topk=int(topk), beta=float(beta), power=2.0)
-                data_def, w1, w2 = apply_gnnguard_paper_defense(model, attacked_data.clone(), x_smoothed=best_smooth, params=params)
+                # Poisoning: include a purification stage (low-rank adjacency recovery) before GNNGuard.
+                base_w = None
+                data_in = attacked_data.clone()
+                if str(attack_type).lower().startswith("poison"):
+                    try:
+                        adj_pur = svd_defense(attacked_adj, k=min(80, attacked_adj.shape[0] - 2))
+                        adj_pur = _symmetrize_and_self_loop(adj_pur)
+                        coo = adj_pur.tocoo()
+                        data_in.edge_index = torch.tensor(np.vstack([coo.row, coo.col]), dtype=torch.long, device=attacked_data.edge_index.device)
+                        base_w = torch.tensor(coo.data.astype(np.float32), dtype=torch.float32, device=attacked_data.edge_index.device)
+                    except Exception:
+                        base_w = None
+
+                data_def, w1, w2 = apply_gnnguard_paper_defense(model, data_in, x_smoothed=best_smooth, params=params)
+                if base_w is not None and base_w.numel() == w1.numel():
+                    w1 = (w1 * base_w).clamp(0.0, 1.0)
+                    w2 = (w2 * base_w).clamp(0.0, 1.0)
                 data_def.edge_weight_l1 = w1
                 data_def.edge_weight_l2 = w2
-                name = f"Defense: BasePaper(GNNGuard) [topk={topk}, beta={beta}, tau={tau}]"
+                name = f"Defense: BasePaper(GNNGuard) [topk={topk}, beta={beta}, tau={tau}]" + (
+                    " + Purify" if str(attack_type).lower().startswith("poison") else ""
+                )
                 if str(attack_type).lower().startswith("poison"):
                     retr = train_model(model_builder(), data_def, epochs=160, edge_weight_l1=w1, edge_weight_l2=w2)
                     m, pred, probs = evaluate_model(retr, data_def)
@@ -1306,8 +1451,19 @@ def main(profile="paper", clean=False, dataset_name="Cora"):
     target_node = int(idx_test[0])
 
     print("\n=== ONTOLOGY BUILD (OWL/RDF EXPORT) ===")
+    # Cora has canonical research topics; we use these names in the ontology for meaningful rules.
+    cora_topics = [
+        "CaseBased",
+        "GeneticAlgorithms",
+        "NeuralNetworks",
+        "ProbabilisticMethods",
+        "ReinforcementLearning",
+        "RuleLearning",
+        "Theory",
+    ]
+    class_names = cora_topics if dataset_name == "Cora" and dataset.num_classes == 7 else None
     ontology_defense = OntologyGuidedDefense(dataset_name=dataset_name, export_dir="results/ontologies", export_owl=True)
-    ontology_artifacts = ontology_defense.fit(data)
+    ontology_artifacts = ontology_defense.fit(data, class_names=class_names)
     export_ontology_artifacts(ontology_artifacts, data.edge_index.cpu().numpy(), out_dir=os.path.join("results", "ontologies", dataset_name), top_k=8)
 
     # Paper-style architecture diagrams (clean, explanatory block diagrams).
@@ -1966,12 +2122,26 @@ def main(profile="paper", clean=False, dataset_name="Cora"):
     attack_results_path = "results/attack_results.csv"
     pd.DataFrame(run_rows).to_csv(attack_results_path, index=False)
 
+    # Export a Cora-specific semantic graph snapshot so the OWL file can include:
+    # Paper/Topic/CitationEdge/Vulnerability individuals with object+data properties.
+    graph_snapshot_path = None
+    try:
+        graph_snapshot_path = export_cora_semantic_snapshot(
+            data=data,
+            artifacts=ontology_artifacts,
+            dataset_name=dataset_name,
+            out_path="results/ontology_graph_snapshot.json",
+        )
+    except Exception as e:
+        print(f"[WARN] Failed to export ontology graph snapshot: {e}")
+
     # Convert CSV -> OWL for Protégé.
     try:
         generate_reasoned_ontology(
             csv_path=attack_results_path,
             base_owl_path="ontology/gnn_attacks_ontology_starter.owl",
             out_owl_path="ontology/gnn_attack_reasoned.owl",
+            graph_json_path=graph_snapshot_path,
         )
     except Exception as e:
         print(f"[WARN] Ontology CSV->OWL export failed: {e}")

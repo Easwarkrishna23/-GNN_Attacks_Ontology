@@ -57,6 +57,94 @@
         <rdfs:subClassOf rdf:resource="#Defense"/>
     </owl:Class>
 
+    <!-- ===================== -->
+    <!-- Cora Citation Semantics -->
+    <!-- ===================== -->
+    <owl:Class rdf:about="#Paper"/>
+    <owl:Class rdf:about="#Topic"/>
+    <owl:Class rdf:about="#CitationEdge"/>
+    <owl:Class rdf:about="#SuspiciousEdge">
+        <rdfs:subClassOf rdf:resource="#CitationEdge"/>
+    </owl:Class>
+    <owl:Class rdf:about="#BridgeEdge">
+        <rdfs:subClassOf rdf:resource="#CitationEdge"/>
+    </owl:Class>
+    <owl:Class rdf:about="#FeatureVector"/>
+    <owl:Class rdf:about="#ClassLabel"/>
+
+    <!-- Cora's 7 canonical topic classes -->
+    <owl:Class rdf:about="#CaseBased">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#GeneticAlgorithms">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#NeuralNetworks">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#ProbabilisticMethods">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#ReinforcementLearning">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#RuleLearning">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+    <owl:Class rdf:about="#Theory">
+        <rdfs:subClassOf rdf:resource="#Topic"/>
+    </owl:Class>
+
+    <!-- ===================== -->
+    <!-- Graph Topology Semantics -->
+    <!-- ===================== -->
+    <owl:Class rdf:about="#Neighborhood"/>
+    <owl:Class rdf:about="#Community"/>
+    <owl:Class rdf:about="#TriggerMotif"/>
+
+    <!-- ===================== -->
+    <!-- Vulnerability Modeling -->
+    <!-- ===================== -->
+    <owl:Class rdf:about="#Vulnerability"/>
+    <owl:Class rdf:about="#LowHomophilyVulnerability">
+        <rdfs:subClassOf rdf:resource="#Vulnerability"/>
+    </owl:Class>
+    <owl:Class rdf:about="#BridgeNodeVulnerability">
+        <rdfs:subClassOf rdf:resource="#Vulnerability"/>
+    </owl:Class>
+    <owl:Class rdf:about="#HighCentralityVulnerability">
+        <rdfs:subClassOf rdf:resource="#Vulnerability"/>
+    </owl:Class>
+    <owl:Class rdf:about="#TopicMismatchVulnerability">
+        <rdfs:subClassOf rdf:resource="#Vulnerability"/>
+    </owl:Class>
+    <owl:Class rdf:about="#SparseNeighborhoodVulnerability">
+        <rdfs:subClassOf rdf:resource="#Vulnerability"/>
+    </owl:Class>
+
+    <!-- ===================== -->
+    <!-- Defense Chain Planning -->
+    <!-- ===================== -->
+    <owl:Class rdf:about="#DefenseChain"/>
+    <owl:Class rdf:about="#DefenseStage"/>
+
+    <!-- Base-paper (GNNGuard-style) defense modules as explicit subclasses -->
+    <owl:Class rdf:about="#SimilarityPruningDefense">
+        <rdfs:subClassOf rdf:resource="#EdgeFilteringDefense"/>
+    </owl:Class>
+    <owl:Class rdf:about="#NeighborImportanceDefense">
+        <rdfs:subClassOf rdf:resource="#EdgeFilteringDefense"/>
+    </owl:Class>
+    <owl:Class rdf:about="#LayerMemoryDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+    <owl:Class rdf:about="#FeatureSmootheningDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+    <owl:Class rdf:about="#SubgraphIsolationDefense">
+        <rdfs:subClassOf rdf:resource="#Defense"/>
+    </owl:Class>
+
     <!-- Metric subclasses -->
     <owl:Class rdf:about="#AccuracyMetric">
         <rdfs:subClassOf rdf:resource="#ImpactMetric"/>
@@ -102,6 +190,50 @@
         <rdfs:range rdf:resource="#OntologyRule"/>
     </owl:ObjectProperty>
 
+    <!-- Cora semantic object properties -->
+    <owl:ObjectProperty rdf:about="#hasTopic">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="#Topic"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#hasFeatureVector">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="#FeatureVector"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#hasVulnerability">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="#Vulnerability"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#citesPaper">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="#Paper"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#citesFrom">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="#Paper"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#citesTo">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="#Paper"/>
+    </owl:ObjectProperty>
+
+    <!-- Defense-chain planning object properties -->
+    <owl:ObjectProperty rdf:about="#recommendedChain">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="#DefenseChain"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#hasDefenseStage">
+        <rdfs:domain rdf:resource="#DefenseChain"/>
+        <rdfs:range rdf:resource="#DefenseStage"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#nextDefenseStage">
+        <rdfs:domain rdf:resource="#DefenseStage"/>
+        <rdfs:range rdf:resource="#DefenseStage"/>
+    </owl:ObjectProperty>
+    <owl:ObjectProperty rdf:about="#stageDefense">
+        <rdfs:domain rdf:resource="#DefenseStage"/>
+        <rdfs:range rdf:resource="#Defense"/>
+    </owl:ObjectProperty>
+
     <!-- ===================== -->
     <!-- Data Properties       -->
     <!-- ===================== -->
@@ -122,6 +254,91 @@
 
     <owl:DatatypeProperty rdf:about="#accuracyAfterDefense">
         <rdfs:domain rdf:resource="#ImpactMetric"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+
+    <!-- Run/label metadata -->
+    <owl:DatatypeProperty rdf:about="#attackLabel">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#attackType">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#defenseLabel">
+        <rdfs:domain rdf:resource="#Attack"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+
+    <!-- Cora semantic data properties -->
+    <owl:DatatypeProperty rdf:about="#paperId">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#degree">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#pagerank">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#local_homophily">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#neighbor_entropy">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#topic_mismatch_frac">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#numActiveFeatures">
+        <rdfs:domain rdf:resource="#FeatureVector"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#topFeatureIds">
+        <rdfs:domain rdf:resource="#FeatureVector"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#cosine">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#jaccard">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#topicSimilarity">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#citationTrust">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#suspiciousReason">
+        <rdfs:domain rdf:resource="#CitationEdge"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#embeddingDrift">
+        <rdfs:domain rdf:resource="#Paper"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#vulnerabilityScore">
+        <rdfs:domain rdf:resource="#Vulnerability"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
+    </owl:DatatypeProperty>
+    <owl:DatatypeProperty rdf:about="#vulnerabilityType">
+        <rdfs:domain rdf:resource="#Vulnerability"/>
+        <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#string"/>
+    </owl:DatatypeProperty>
+
+    <owl:DatatypeProperty rdf:about="#stageIndex">
+        <rdfs:domain rdf:resource="#DefenseStage"/>
         <rdfs:range rdf:resource="http://www.w3.org/2001/XMLSchema#float"/>
     </owl:DatatypeProperty>
 

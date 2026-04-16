@@ -102,6 +102,27 @@ class OntologyRuleEngine:
                 body="hasFeature(?u,?f) ^ indicatesTopic(?f,?t) ^ strongAffinity(?f,?t)",
                 head="boostTopicConfidence(?u,?t)",
             ),
+            # Cora-specific rules (defense planning semantics)
+            SWRLRule(
+                name="TopicMismatchSuspiciousCitation",
+                body="CitationEdge(?e) ^ citesFrom(?e,?u) ^ citesTo(?e,?v) ^ topicMismatch(?u,?v) ^ lowSimilarity(?e)",
+                head="SuspiciousEdge(?e)",
+            ),
+            SWRLRule(
+                name="HomophilyCollapseTriggersPurification",
+                body="Dataset(?d) ^ hasHomophilyRatio(?d,?h) ^ swrlb:lessThan(?h,0.45)",
+                head="GraphPurificationDefense(?def)",
+            ),
+            SWRLRule(
+                name="EmbeddingDriftTriggersAdvTraining",
+                body="Paper(?p) ^ embeddingDrift(?p,?s) ^ swrlb:greaterThan(?s,0.30)",
+                head="AdversarialTrainingDefense(?def)",
+            ),
+            SWRLRule(
+                name="BridgeNodeVulnerabilityIsolation",
+                body="Paper(?p) ^ BridgeNodeVulnerability(?v) ^ hasVulnerability(?p,?v)",
+                head="SubgraphIsolationDefense(?def)",
+            ),
         ]
 
     def compute_node_confidence(self, artifacts: OntologyArtifacts) -> np.ndarray:
@@ -157,6 +178,18 @@ class OntologyRuleEngine:
         sim = (num / (den + cfg.eps)).astype(np.float32)
 
         trust = sim * conf[src] * conf[dst]
+
+        # Cora-specific: penalize edges incident to bridge-vulnerable nodes when topics mismatch.
+        # This captures "bridge node vulnerability" and "topic mismatch vulnerability".
+        vul = artifacts.vulnerability_scores if hasattr(artifacts, "vulnerability_scores") else {}
+        bridge = vul.get("BridgeNodeVulnerability", None)
+        mismatch = vul.get("TopicMismatchVulnerability", None)
+        if bridge is not None and mismatch is not None:
+            b = bridge[src] * bridge[dst]
+            # if either endpoint has high mismatch tendency, reduce trust further
+            mfac = 0.5 * (mismatch[src] + mismatch[dst])
+            penalty = np.clip(b * mfac, 0.0, 1.0).astype(np.float32)
+            trust = trust * (1.0 - 0.35 * penalty)
 
         # Cross-topic penalty: if dominant topics differ, reduce trust slightly
         dom_src = p_src.argmax(axis=1)
@@ -261,4 +294,3 @@ class OntologyRuleEngine:
         if report is not None and (removed or added):
             report.repairs.append((int(node_id), removed, added, f"repair toward topic={topic}"))
         return x.astype(np.float32)
-

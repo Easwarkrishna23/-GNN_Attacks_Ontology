@@ -74,6 +74,14 @@ class OntologyArtifacts:
     topic_hierarchy: Dict[str, List[str]]
     # concept inheritance score for subtopics (subtopic -> score)
     inheritance_score: Dict[str, float]
+    # ---- Cora citation-graph semantics (node-level) ----
+    node_degree: np.ndarray
+    node_pagerank: np.ndarray
+    node_local_homophily: np.ndarray
+    node_neighbor_entropy: np.ndarray
+    node_topic_mismatch_frac: np.ndarray
+    # Vulnerability scores in [0,1] per vulnerability type
+    vulnerability_scores: Dict[str, np.ndarray]
 
     def dominant_topic(self) -> np.ndarray:
         return self.node_topic_confidence.argmax(axis=1)
@@ -119,7 +127,112 @@ class OntologyBuilder:
     def infer_class_names(self, num_classes: int, provided: Optional[Sequence[str]] = None) -> List[str]:
         if provided is not None and len(provided) == num_classes:
             return list(provided)
+        # Cora has canonical 7 research topics. These names should appear in the ontology.
+        if str(self.config.dataset_name).lower() == "cora" and int(num_classes) == 7:
+            return [
+                "CaseBased",
+                "GeneticAlgorithms",
+                "NeuralNetworks",
+                "ProbabilisticMethods",
+                "ReinforcementLearning",
+                "RuleLearning",
+                "Theory",
+            ]
         return [f"Topic_{i}" for i in range(int(num_classes))]
+
+    def _pagerank_power_iteration(self, adj: sp.csr_matrix, iters: int = 30, d: float = 0.85) -> np.ndarray:
+        """
+        Lightweight PageRank for citation-style graphs without networkx.
+        """
+        N = adj.shape[0]
+        # Row-stochastic
+        row_sum = np.array(adj.sum(axis=1)).reshape(-1).astype(np.float32)
+        row_sum[row_sum == 0] = 1.0
+        Dinv = sp.diags(1.0 / row_sum)
+        P = (Dinv @ adj).tocsr()
+        r = np.ones((N,), dtype=np.float32) / float(N)
+        teleport = (1.0 - float(d)) / float(N)
+        for _ in range(int(iters)):
+            r = teleport + float(d) * (P.T @ r)
+        r = r / (r.sum() + self.config.eps)
+        return r.astype(np.float32)
+
+    def compute_graph_semantics(
+        self,
+        edge_index: np.ndarray,
+        y: np.ndarray,
+        num_nodes: int,
+    ) -> Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, Dict[str, np.ndarray]]:
+        """
+        Compute Cora-specific graph semantics used for ontology and defenses:
+        - degree
+        - pagerank (approx)
+        - local homophily (per node)
+        - neighbor label entropy (per node)
+        - topic mismatch fraction (per node)
+        - vulnerability scores (per node)
+        """
+        cfg = self.config
+        ei = edge_index.astype(np.int64)
+        src = ei[0]
+        dst = ei[1]
+
+        # Build undirected adjacency for structural statistics.
+        adj = sp.coo_matrix((np.ones_like(src, dtype=np.float32), (src, dst)), shape=(num_nodes, num_nodes)).tocsr()
+        adj = adj.maximum(adj.T).tocsr()
+        adj.setdiag(0.0)
+        adj.eliminate_zeros()
+
+        deg = np.array(adj.sum(axis=1)).reshape(-1).astype(np.float32)
+
+        # Local homophily and neighbor entropy
+        hom = np.zeros((num_nodes,), dtype=np.float32)
+        ent = np.zeros((num_nodes,), dtype=np.float32)
+        mismatch = np.zeros((num_nodes,), dtype=np.float32)
+        y = y.astype(np.int64)
+        for u in range(num_nodes):
+            nbr = adj.indices[adj.indptr[u] : adj.indptr[u + 1]]
+            if nbr.size == 0:
+                hom[u] = 0.0
+                ent[u] = 0.0
+                mismatch[u] = 0.0
+                continue
+            labs = y[nbr]
+            same = float(np.sum(labs == y[u]))
+            hom[u] = same / float(nbr.size)
+            mismatch[u] = 1.0 - hom[u]
+            # entropy of neighbor-label distribution
+            binc = np.bincount(labs, minlength=int(np.max(y) + 1)).astype(np.float32)
+            p = binc / (binc.sum() + cfg.eps)
+            ent[u] = float(-(p * np.log(p + cfg.eps)).sum())
+
+        # Pagerank (role/centrality proxy)
+        try:
+            pr = self._pagerank_power_iteration(adj + sp.eye(num_nodes, dtype=np.float32, format="csr"), iters=30, d=0.85)
+        except Exception:
+            pr = (deg / (deg.max() + cfg.eps)).astype(np.float32)
+
+        # Normalize degree and pagerank to [0,1]
+        deg_n = (deg / (deg.max() + cfg.eps)).astype(np.float32) if float(deg.max()) > 0 else deg
+        pr_n = (pr / (pr.max() + cfg.eps)).astype(np.float32) if float(pr.max()) > 0 else pr
+
+        # Vulnerabilities in [0,1]
+        v_low_hom = np.clip((0.6 - hom) / 0.6, 0.0, 1.0).astype(np.float32)
+        v_sparse = np.clip((2.0 - deg) / 2.0, 0.0, 1.0).astype(np.float32)
+        v_central = np.clip(0.5 * deg_n + 0.5 * pr_n, 0.0, 1.0).astype(np.float32)
+        v_topic_mismatch = np.clip(mismatch, 0.0, 1.0).astype(np.float32)
+        # Bridge vulnerability: high neighbor entropy AND high centrality
+        ent_n = (ent / (ent.max() + cfg.eps)).astype(np.float32) if float(ent.max()) > 0 else ent
+        v_bridge = np.clip(ent_n * v_central, 0.0, 1.0).astype(np.float32)
+
+        vul = {
+            "LowHomophilyVulnerability": v_low_hom,
+            "SparseNeighborhoodVulnerability": v_sparse,
+            "HighCentralityVulnerability": v_central,
+            "TopicMismatchVulnerability": v_topic_mismatch,
+            "BridgeNodeVulnerability": v_bridge,
+        }
+        return deg.astype(np.float32), pr.astype(np.float32), hom, ent, mismatch, vul
 
     def build_label_affinity(
         self,
@@ -303,6 +416,7 @@ class OntologyBuilder:
         X: np.ndarray,
         y: np.ndarray,
         train_mask: np.ndarray,
+        edge_index: Optional[np.ndarray] = None,
         feature_names: Optional[Sequence[str]] = None,
         class_names: Optional[Sequence[str]] = None,
     ) -> OntologyArtifacts:
@@ -330,6 +444,22 @@ class OntologyBuilder:
         node_scores = self.node_topic_scores(X, affinity)
         anomaly = self.node_anomaly_scores(X, contradictions)
 
+        if edge_index is None:
+            deg = np.zeros((N,), dtype=np.float32)
+            pr = np.zeros((N,), dtype=np.float32)
+            hom = np.zeros((N,), dtype=np.float32)
+            ent = np.zeros((N,), dtype=np.float32)
+            mismatch = np.zeros((N,), dtype=np.float32)
+            vul = {
+                "LowHomophilyVulnerability": np.zeros((N,), dtype=np.float32),
+                "SparseNeighborhoodVulnerability": np.zeros((N,), dtype=np.float32),
+                "HighCentralityVulnerability": np.zeros((N,), dtype=np.float32),
+                "TopicMismatchVulnerability": np.zeros((N,), dtype=np.float32),
+                "BridgeNodeVulnerability": np.zeros((N,), dtype=np.float32),
+            }
+        else:
+            deg, pr, hom, ent, mismatch, vul = self.compute_graph_semantics(edge_index=edge_index, y=y, num_nodes=N)
+
         return OntologyArtifacts(
             config=cfg,
             feature_names=f_names,
@@ -341,6 +471,12 @@ class OntologyBuilder:
             node_anomaly=anomaly.astype(np.float32),
             topic_hierarchy=hierarchy,
             inheritance_score=inheritance,
+            node_degree=deg,
+            node_pagerank=pr,
+            node_local_homophily=hom,
+            node_neighbor_entropy=ent,
+            node_topic_mismatch_frac=mismatch,
+            vulnerability_scores=vul,
         )
 
     def export_gnn_matrices(
@@ -371,4 +507,3 @@ class OntologyBuilder:
         trust = sim * conf[src] * conf[dst]
         trust = np.clip(trust, 0.0, 1.0).astype(np.float32)
         return trust, conf.astype(np.float32)
-

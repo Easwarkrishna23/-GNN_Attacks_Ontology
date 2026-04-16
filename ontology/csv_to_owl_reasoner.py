@@ -139,6 +139,7 @@ def generate_reasoned_ontology(
     csv_path: str = "results/attack_results.csv",
     base_owl_path: str = "ontology/gnn_attacks_ontology_starter.owl",
     out_owl_path: str = "ontology/gnn_attack_reasoned.owl",
+    graph_json_path: Optional[str] = None,
 ) -> str:
     """
     Convert `csv_path` into an OWL RDF/XML file by extending `base_owl_path`.
@@ -195,26 +196,163 @@ def generate_reasoned_ontology(
     # The starter ontology defines class OntologyRule and object property usesRule (Defense -> OntologyRule).
     # We create a small fixed rule-set with human-readable SWRL-like comments.
     rules = [
-        (
-            iri("Rule_SemanticContradiction"),
-            "If a node contains feature combinations that contradict topic constraints, mark it anomalous and repair.",
-        ),
-        (
-            iri("Rule_LowTopicAffinityEdge"),
-            "If an edge connects nodes with very low topic/label affinity, down-weight or prune the edge.",
-        ),
-        (
-            iri("Rule_CentralityOutlier"),
-            "If an injected neighbor creates an unusual centrality pattern (degree/role shift), reduce its trust.",
-        ),
+        (iri("Rule_SemanticContradiction"), "Contradictory features -> anomalous paper -> repair features."),
+        (iri("Rule_TopicMismatchSuspiciousEdge"), "Topic mismatch + low similarity -> mark citation edge suspicious."),
+        (iri("Rule_LowHomophilyPurification"), "Homophily collapse -> trigger graph purification defense."),
+        (iri("Rule_EmbeddingDriftAdversarialRetrain"), "Embedding drift -> trigger adversarial retraining defense."),
+        (iri("Rule_BridgeNodeIsolation"), "Bridge/high-centrality vulnerable paper targeted -> isolate subgraph / reduce trust."),
+        (iri("Rule_CentralityOutlier"), "Centrality/role shift anomaly -> reduce edge trust."),
     ]
     for rule_iri, comment in rules:
         _ensure_individual(root, existing, rule_iri, iri("OntologyRule"), comment=comment)
+
+    # ---------------------------------------------------------------------
+    # Defense modules + chain planning (Cora-specific)
+    # ---------------------------------------------------------------------
+    # Create reusable defense module individuals so stages can reference them.
+    defense_modules = [
+        ("SimilarityPruningDefenseModule", iri("SimilarityPruningDefense")),
+        ("NeighborImportanceDefenseModule", iri("NeighborImportanceDefense")),
+        ("LayerMemoryDefenseModule", iri("LayerMemoryDefense")),
+        ("GraphPurificationDefenseModule", iri("GraphPurificationDefense")),
+        ("FeatureSmootheningDefenseModule", iri("FeatureSmootheningDefense")),
+        ("AdversarialTrainingDefenseModule", iri("AdversarialTrainingDefense")),
+        ("SemanticRuleDefenseModule", iri("SemanticRuleDefense")),
+        ("SubgraphIsolationDefenseModule", iri("SubgraphIsolationDefense")),
+    ]
+    for name, typ in defense_modules:
+        _ensure_individual(root, existing, iri(name), typ)
+
+    def _plan_chain(attack_type: str, attack_name: str, severity: float) -> List[str]:
+        at = (attack_type or "").lower()
+        an = (attack_name or "").lower()
+        # Evasion: feature attacks benefit from smoothing + semantic repair + neighbor trust.
+        if at == "evasion" and "feature" in an:
+            return ["FeatureSmootheningDefenseModule", "SemanticRuleDefenseModule", "NeighborImportanceDefenseModule"]
+        # Structural evasion: focus on pruning + memory.
+        if at == "evasion":
+            return ["SimilarityPruningDefenseModule", "NeighborImportanceDefenseModule", "LayerMemoryDefenseModule"]
+        # Poisoning: use full recovery chain; add purification/adversarial training for higher severity.
+        chain = ["SimilarityPruningDefenseModule", "NeighborImportanceDefenseModule", "LayerMemoryDefenseModule"]
+        if severity >= 0.10:
+            chain.append("GraphPurificationDefenseModule")
+        chain.append("FeatureSmootheningDefenseModule")
+        if severity >= 0.15:
+            chain.append("AdversarialTrainingDefenseModule")
+        return chain
 
     # Add individuals from CSV rows.
     with open(csv_path, "r", encoding="utf-8") as f:
         reader = csv.DictReader(f)
         rows = list(reader)
+
+    # Optional: enrich OWL with Cora-specific Paper/Topic/CitationEdge/Vulnerability semantics.
+    graph_blob = None
+    if graph_json_path:
+        p = Path(str(graph_json_path))
+        if p.exists():
+            try:
+                import json
+
+                graph_blob = json.loads(p.read_text(encoding="utf-8"))
+            except Exception as e:
+                print(f"[WARN] Could not read graph snapshot JSON: {e}")
+
+    if graph_blob is not None:
+        # Ensure core Cora semantic individuals exist.
+        topics = graph_blob.get("topics", [])
+        # Create Topic individuals + Topic classes are assumed in base OWL.
+        for t in topics:
+            t_id = safe_id(str(t))
+            t_iri = iri(f"Topic_{t_id}")
+            _ensure_individual(root, existing, t_iri, iri("Topic"))
+
+        # Add Paper individuals + FeatureVector + Vulnerability individuals
+        papers = graph_blob.get("papers", [])
+        for p in papers:
+            pid = int(p.get("id", 0))
+            paper_iri = iri(f"Paper_{pid}")
+            _ensure_individual(root, existing, paper_iri, iri("Paper"))
+
+            # Assign topic membership (both as object property and rdf:type of topic class when available).
+            topic = safe_id(str(p.get("topic", "Unknown")))
+            topic_ind = iri(f"Topic_{topic}")
+            _ensure_individual(root, existing, topic_ind, iri("Topic"))
+            for ind in root.findall(_qname("owl", "NamedIndividual")):
+                if ind.attrib.get(_qname("rdf", "about")) == paper_iri:
+                    add_obj_prop(ind, "hasTopic", topic_ind)
+                    # Data properties for centrality/homophily/etc.
+                    for k in ["degree", "pagerank", "local_homophily", "neighbor_entropy", "topic_mismatch_frac"]:
+                        fv = _parse_float(p.get(k, ""))
+                        if fv is not None:
+                            add_data_prop_float(ind, safe_id(k), float(fv))
+                    add_data_prop_float(ind, "paperId", float(pid))
+                    break
+
+            # FeatureVector individual
+            fv_iri = iri(f"FeatureVector_{pid}")
+            _ensure_individual(root, existing, fv_iri, iri("FeatureVector"))
+            for ind in root.findall(_qname("owl", "NamedIndividual")):
+                if ind.attrib.get(_qname("rdf", "about")) == fv_iri:
+                    top_feats = p.get("top_feature_ids", [])
+                    add_data_prop_str(ind, "topFeatureIds", ",".join(str(x) for x in top_feats))
+                    naf = _parse_float(p.get("num_active_features", ""))
+                    if naf is not None:
+                        add_data_prop_float(ind, "numActiveFeatures", float(naf))
+                    break
+            for ind in root.findall(_qname("owl", "NamedIndividual")):
+                if ind.attrib.get(_qname("rdf", "about")) == paper_iri:
+                    add_obj_prop(ind, "hasFeatureVector", fv_iri)
+                    break
+
+            # Vulnerabilities
+            vlist = p.get("vulnerabilities", []) or []
+            for v in vlist:
+                vtype = safe_id(str(v.get("type", "Vulnerability")))
+                vscore = _parse_float(v.get("score", ""))
+                v_iri = iri(f"Vuln_{vtype}_{pid}")
+                # Always type as Vulnerability; encode the specific vulnerability type as a data property.
+                _ensure_individual(root, existing, v_iri, iri("Vulnerability"))
+                for ind in root.findall(_qname("owl", "NamedIndividual")):
+                    if ind.attrib.get(_qname("rdf", "about")) == v_iri and vscore is not None:
+                        add_data_prop_float(ind, "vulnerabilityScore", float(vscore))
+                        add_data_prop_str(ind, "vulnerabilityType", vtype)
+                        # Also add a more specific vulnerability class type when available in the schema.
+                        ET.SubElement(ind, _qname("rdf", "type"), _rdf_resource(iri(vtype)))
+                        break
+                for ind in root.findall(_qname("owl", "NamedIndividual")):
+                    if ind.attrib.get(_qname("rdf", "about")) == paper_iri:
+                        add_obj_prop(ind, "hasVulnerability", v_iri)
+                        break
+
+        # Add CitationEdge individuals with semantic trust scores
+        edges = graph_blob.get("edges", [])
+        for e in edges:
+            u = int(e.get("src", 0))
+            v = int(e.get("dst", 0))
+            edge_iri = iri(f"CitationEdge_{u}_{v}")
+            _ensure_individual(root, existing, edge_iri, iri("CitationEdge"))
+            u_iri = iri(f"Paper_{u}")
+            v_iri = iri(f"Paper_{v}")
+            _ensure_individual(root, existing, u_iri, iri("Paper"))
+            _ensure_individual(root, existing, v_iri, iri("Paper"))
+            for ind in root.findall(_qname("owl", "NamedIndividual")):
+                if ind.attrib.get(_qname("rdf", "about")) == edge_iri:
+                    add_obj_prop(ind, "citesFrom", u_iri)
+                    add_obj_prop(ind, "citesTo", v_iri)
+                    # semantic similarity scores
+                    for k in ["cosine", "jaccard", "topicSimilarity", "citationTrust"]:
+                        fv = _parse_float(e.get(k, ""))
+                        if fv is not None:
+                            add_data_prop_float(ind, safe_id(k), float(fv))
+                    add_data_prop_str(ind, "suspiciousReason", str(e.get("suspicious_reason", "")))
+                    # Mark suspicious edges explicitly
+                    if bool(e.get("suspicious", False)):
+                        # Add an extra rdf:type triple by creating a second rdf:type element.
+                        ET.SubElement(ind, _qname("rdf", "type"), _rdf_resource(iri("SuspiciousEdge")))
+                    if bool(e.get("bridge_edge", False)):
+                        ET.SubElement(ind, _qname("rdf", "type"), _rdf_resource(iri("BridgeEdge")))
+                    break
 
     for row in rows:
         run_id = safe_id(row.get("run_id", ""))  # required for uniqueness
@@ -286,6 +424,34 @@ def generate_reasoned_ontology(
             add_data_prop_str(aind, "attackType", attack_type)
             if defense_name:
                 add_data_prop_str(aind, "defenseLabel", defense_name)
+
+            # Defense-chain planning: encode a recommended multi-stage workflow.
+            chain_modules = _plan_chain(attack_type=attack_type, attack_name=row.get("attack", "") or "", severity=float(sev))
+            chain_iri = iri(f"DefenseChain_Run_{run_id}")
+            _ensure_individual(root, existing, chain_iri, iri("DefenseChain"))
+            add_obj_prop(aind, "recommendedChain", chain_iri)
+
+            prev_stage_iri = None
+            for si, mod_name in enumerate(chain_modules, start=1):
+                stage_iri = iri(f"DefenseStage_{run_id}_{si}")
+                _ensure_individual(root, existing, stage_iri, iri("DefenseStage"))
+                # chain -> stage
+                for cind in root.findall(_qname("owl", "NamedIndividual")):
+                    if cind.attrib.get(_qname("rdf", "about")) == chain_iri:
+                        add_obj_prop(cind, "hasDefenseStage", stage_iri)
+                        break
+                # stage -> defense module
+                for sind in root.findall(_qname("owl", "NamedIndividual")):
+                    if sind.attrib.get(_qname("rdf", "about")) == stage_iri:
+                        add_obj_prop(sind, "stageDefense", iri(mod_name))
+                        add_data_prop_float(sind, "stageIndex", float(si))
+                        break
+                if prev_stage_iri is not None:
+                    for pind in root.findall(_qname("owl", "NamedIndividual")):
+                        if pind.attrib.get(_qname("rdf", "about")) == prev_stage_iri:
+                            add_obj_prop(pind, "nextDefenseStage", stage_iri)
+                            break
+                prev_stage_iri = stage_iri
 
         # Metric individual.
         if metric_iri not in existing:
