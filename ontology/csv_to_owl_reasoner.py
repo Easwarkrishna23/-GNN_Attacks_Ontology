@@ -168,6 +168,7 @@ def generate_reasoned_ontology(
         ont_ns = ont_ns + "#"
 
     existing = _existing_individual_ids(root)
+    linked_defenses = set()
 
     def iri(local: str) -> str:
         if local.startswith("#"):
@@ -187,6 +188,28 @@ def generate_reasoned_ontology(
         attrs, text = _xsd_str_text(v)
         e = ET.SubElement(ind, f"{{{ont_ns}}}{prop_local}", attrs)
         e.text = text
+
+    # ---------------------------------------------------------------------
+    # Semantic rule individuals (so every defense has an explicit rule link)
+    # ---------------------------------------------------------------------
+    # The starter ontology defines class OntologyRule and object property usesRule (Defense -> OntologyRule).
+    # We create a small fixed rule-set with human-readable SWRL-like comments.
+    rules = [
+        (
+            iri("Rule_SemanticContradiction"),
+            "If a node contains feature combinations that contradict topic constraints, mark it anomalous and repair.",
+        ),
+        (
+            iri("Rule_LowTopicAffinityEdge"),
+            "If an edge connects nodes with very low topic/label affinity, down-weight or prune the edge.",
+        ),
+        (
+            iri("Rule_CentralityOutlier"),
+            "If an injected neighbor creates an unusual centrality pattern (degree/role shift), reduce its trust.",
+        ),
+    ]
+    for rule_iri, comment in rules:
+        _ensure_individual(root, existing, rule_iri, iri("OntologyRule"), comment=comment)
 
     # Add individuals from CSV rows.
     with open(csv_path, "r", encoding="utf-8") as f:
@@ -222,6 +245,14 @@ def generate_reasoned_ontology(
         _ensure_individual(root, existing, model_iri, iri("Model"))
         if defense_iri:
             _ensure_individual(root, existing, defense_iri, iri("Defense"))
+            # Link defenses to semantic rules once (explicit semantic logic, not just similarity).
+            if defense_iri not in linked_defenses:
+                for rule_iri, _comment in rules:
+                    for ind in root.findall(_qname("owl", "NamedIndividual")):
+                        if ind.attrib.get(_qname("rdf", "about")) == defense_iri:
+                            add_obj_prop(ind, "usesRule", rule_iri)
+                            break
+                linked_defenses.add(defense_iri)
 
         # Create per-run individuals.
         attack_iri = iri(f"Run_{run_id}_Attack")
@@ -322,4 +353,3 @@ def main(argv: Optional[List[str]] = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

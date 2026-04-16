@@ -6,14 +6,30 @@ from models.gat import GAT
 from utils.metrics import compute_classification_metrics
 import os
 
-def train_model(model, data, epochs=200, lr=0.01, weight_decay=5e-4, regularizer=None, reg_weight=0.0, edge_weight=None):
+def train_model(
+    model,
+    data,
+    epochs=200,
+    lr=0.01,
+    weight_decay=5e-4,
+    regularizer=None,
+    reg_weight=0.0,
+    edge_weight=None,
+    edge_weight_l1=None,
+    edge_weight_l2=None,
+):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr, weight_decay=weight_decay)
     
     model.train()
     for epoch in range(epochs):
         optimizer.zero_grad()
+        # Some defenses use shared edge weights; others use layer-wise trust weights.
         if edge_weight is not None:
             data.edge_weight = edge_weight
+        if edge_weight_l1 is not None:
+            data.edge_weight_l1 = edge_weight_l1
+        if edge_weight_l2 is not None:
+            data.edge_weight_l2 = edge_weight_l2
         out = model(data)
         loss = F.nll_loss(out[data.train_mask], data.y[data.train_mask])
         if regularizer is not None and float(reg_weight) > 0:

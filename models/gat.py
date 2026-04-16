@@ -103,6 +103,9 @@ class GAT(nn.Module):
 
     def forward(self, data):
         x, edge_index = data.x, data.edge_index
+        # Support layer-wise edge trust weights (used by base-paper defense).
+        ew1 = getattr(data, "edge_weight_l1", None)
+        ew2 = getattr(data, "edge_weight_l2", None)
         edge_weight = getattr(data, "edge_weight", None)
         h1, _ = self._attn_layer(
             x,
@@ -113,7 +116,7 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
-            edge_weight=edge_weight,
+            edge_weight=ew1 if ew1 is not None else edge_weight,
         )
         h1 = F.elu(h1)
         logits, _ = self._attn_layer(
@@ -125,12 +128,14 @@ class GAT(nn.Module):
             heads=1,
             out_dim=self.W2.out_features,
             concat=False,
-            edge_weight=edge_weight,
+            edge_weight=ew2 if ew2 is not None else edge_weight,
         )
         return F.log_softmax(logits, dim=1)
 
     def forward_with_debug(self, data):
         x, edge_index = data.x, data.edge_index
+        ew1 = getattr(data, "edge_weight_l1", None)
+        ew2 = getattr(data, "edge_weight_l2", None)
         edge_weight = getattr(data, "edge_weight", None)
 
         def mem_mb(tensor):
@@ -145,7 +150,7 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
-            edge_weight=edge_weight,
+            edge_weight=ew1 if ew1 is not None else edge_weight,
         )
         h1_act = F.elu(h1)
         logits, (ei2, alpha2) = self._attn_layer(
@@ -157,7 +162,7 @@ class GAT(nn.Module):
             heads=1,
             out_dim=self.W2.out_features,
             concat=False,
-            edge_weight=edge_weight,
+            edge_weight=ew2 if ew2 is not None else edge_weight,
         )
         probs = torch.softmax(logits, dim=1)
         preds = probs.argmax(dim=1)
@@ -186,6 +191,7 @@ class GAT(nn.Module):
 
     def get_embeddings(self, data):
         x, edge_index = data.x, data.edge_index
+        ew1 = getattr(data, "edge_weight_l1", None)
         edge_weight = getattr(data, "edge_weight", None)
         h1, _ = self._attn_layer(
             x,
@@ -196,7 +202,7 @@ class GAT(nn.Module):
             heads=self.heads,
             out_dim=self.W1.out_features // self.heads,
             concat=True,
-            edge_weight=edge_weight,
+            edge_weight=ew1 if ew1 is not None else edge_weight,
         )
         return F.elu(h1)
 
