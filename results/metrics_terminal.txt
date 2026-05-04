@@ -1,37 +1,100 @@
-The most impactful Attack is : Evasion: Gradient (FGSM-like) (accuracy drop=0.8180)
+========================================================================================================================
+FINAL STATIC RESULTS: PRE-DEFENSE
+========================================================================================================================
+    Dataset Model              Attack CleanAccuracy AttackedAccuracy AccuracyDrop    ASR
+Cora_Static   GAT       GradientBased        0.8120           0.0030       0.8090 0.0000
+Cora_Static   GAT FeaturePerturbation        0.8120           0.2130       0.5990 0.0000
+Cora_Static   GAT            EdgeFlip        0.8120           0.7280       0.0840 0.0000
+Cora_Static   GAT             Nettack        0.8120           0.7780       0.0340 0.0600
+Cora_Static   GAT           Metattack        0.8120           0.7810       0.0310 0.0000
+Cora_Static   GAT     RandomStructure        0.8120           0.7940       0.0180 0.0000
+Cora_Static   GCN       GradientBased        0.8090           0.0090       0.8000 0.0000
+Cora_Static   GCN FeaturePerturbation        0.8090           0.1850       0.6240 0.0000
+Cora_Static   GCN            EdgeFlip        0.8090           0.7320       0.0770 0.0000
+Cora_Static   GCN             Nettack        0.8090           0.7620       0.0470 0.0000
+Cora_Static   GCN           Metattack        0.8090           0.7810       0.0280 0.0000
+Cora_Static   GCN     RandomStructure        0.8090           0.7860       0.0230 0.0000
 
-FINAL TABLE (PRE-DEFENSE)
-Model,Attack,Accuracy,Macro F1,ROC-AUC,Accuracy Drop,Perturbation Budget
-GCN,Baseline,0.821,0.8069762378934343,0.969767490029393,0.0,0.0
-GCN,Poisoning: Random Structure,0.53,0.5270550473793333,0.826387950537556,0.2909999999999999,800.0
-GCN,Poisoning: Nettack,0.796,0.7877737518580977,0.9644238898133359,0.02499999999999991,96.0
-GCN,Poisoning: Meta Attack,0.798,0.788762224672855,0.9672685128982345,0.02299999999999991,800.0
-GCN,Evasion: Edge Flip,0.806,0.7917437580576241,0.9651936447599583,0.014999999999999902,120.0
-GCN,Evasion: Feature,0.754,0.7352500798695265,0.939059929879083,0.06699999999999995,18.0
-GCN,Evasion: Gradient (FGSM-like),0.003,0.002306813017311427,0.046365124715092076,0.818,0.1
-GCN,Evasion: Adaptive Semantic,0.586,0.5531405063436557,0.8136403195515334,0.235,8.0
-GAT,Baseline,0.805,0.7915324514197838,0.9667047423240094,0.0,0.0
-GAT,Poisoning: Random Structure,0.558,0.5665582093521018,0.8342540918587796,0.247,800.0
-GAT,Poisoning: Nettack,0.777,0.7754350759852809,0.9635055706025878,0.028000000000000025,48.0
-GAT,Poisoning: Meta Attack,0.798,0.7945205126721889,0.9624402431264328,0.007000000000000006,800.0
-GAT,Evasion: Edge Flip,0.784,0.7696902418567584,0.958465462072108,0.02100000000000002,120.0
-GAT,Evasion: Feature,0.58,0.5638133281163856,0.787117507709893,0.2250000000000001,18.0
-GAT,Evasion: Gradient (FGSM-like),0.043,0.019257526255578344,0.08650754106516749,0.762,0.1
-GAT,Evasion: Adaptive Semantic,0.535,0.5042607974688675,0.7055788673153559,0.27,8.0
+The most impactful Attack is : GradientBased
 
+========================================================================================================================
+FINAL STATIC RESULTS: POST-DEFENSE
+========================================================================================================================
+    Dataset Model              Attack           Defense DefendedAccuracy AccuracyRecovery RecoveryRate DefendedF1 DefendedROCAUC RobustnessDefended HomophilyRecoveryRatio DensityDefended ConductanceDefended ModularityDefended
+Cora_Static   GAT            EdgeFlip     HybridDefense           0.6110          -0.1170      -1.3929     0.6006         0.8533             0.7525                -2.2581          0.0057              0.4407             0.5285
+Cora_Static   GAT            EdgeFlip   OntologyDefense           0.5360          -0.1920      -2.2857     0.5201         0.7666             0.6601                -2.9835          0.0052              0.4924             0.4739
+Cora_Static   GAT            EdgeFlip StructuralDefense           0.7290           0.0010       0.0119     0.7188         0.9298             0.8978                -2.0113          0.0053              0.4210             0.4793
+Cora_Static   GAT FeaturePerturbation     HybridDefense           0.1750          -0.0380      -0.0634     0.1614         0.6337             0.2155                 0.0000          0.0056              0.5890             0.5203
+Cora_Static   GAT FeaturePerturbation   OntologyDefense           0.2120          -0.0010      -0.0017     0.1171         0.6158             0.2611                 0.0000          0.0056              0.6154             0.4865
+Cora_Static   GAT FeaturePerturbation StructuralDefense           0.2370           0.0240       0.0401     0.1815         0.5943             0.2919                 0.0000          0.0053              0.5632             0.5361
+Cora_Static   GAT       GradientBased     HybridDefense           0.4170           0.4140       0.5117     0.3355         0.7594             0.5135                 0.0000          0.0061              0.3506             0.5500
+Cora_Static   GAT       GradientBased   OntologyDefense           0.4290           0.4260       0.5266     0.2530         0.5136             0.5283                 0.0000          0.0050              0.3821             0.5485
+Cora_Static   GAT       GradientBased StructuralDefense           0.4360           0.4330       0.5352     0.3476         0.7559             0.5369                 0.0000          0.0053              0.3408             0.5487
+Cora_Static   GAT           Metattack     HybridDefense           0.6160          -0.1650      -5.3226     0.6142         0.8540             0.7586                -2.0186          0.0056              0.4571             0.5140
+Cora_Static   GAT           Metattack   OntologyDefense           0.5590          -0.2220      -7.1613     0.5452         0.7749             0.6884                -2.4758          0.0052              0.4950             0.4483
+Cora_Static   GAT           Metattack StructuralDefense           0.6850          -0.0960      -3.0968     0.6793         0.9205             0.8436                -1.8119          0.0053              0.4388             0.4876
+Cora_Static   GAT             Nettack     HybridDefense           0.5790          -0.1990      -5.8529     0.5714         0.8288             0.7131                -2.2053          0.0057              0.4587             0.5127
+Cora_Static   GAT             Nettack   OntologyDefense           0.5500          -0.2280      -6.7059     0.5374         0.7752             0.6773                -2.6559          0.0052              0.4945             0.5187
+Cora_Static   GAT             Nettack StructuralDefense           0.6630          -0.1150      -3.3824     0.6604         0.9218             0.8165                -2.0221          0.0053              0.4421             0.4612
+Cora_Static   GAT     RandomStructure     HybridDefense           0.6110          -0.1830     -10.1667     0.6050         0.8422             0.7525                -3.0544          0.0057              0.4432             0.5371
+Cora_Static   GAT     RandomStructure   OntologyDefense           0.5370          -0.2570     -14.2778     0.5229         0.7773             0.6613                -3.8298          0.0052              0.4912             0.5226
+Cora_Static   GAT     RandomStructure StructuralDefense           0.7220          -0.0720      -4.0000     0.7079         0.9257             0.8892                -2.6564          0.0052              0.4183             0.4789
+Cora_Static   GCN            EdgeFlip     HybridDefense           0.6350          -0.0970      -1.2597     0.6323         0.8409             0.7849                -2.3207          0.0057              0.4460             0.5015
+Cora_Static   GCN            EdgeFlip   OntologyDefense           0.5550          -0.1770      -2.2987     0.5475         0.7554             0.6860                -2.9126          0.0052              0.4900             0.4694
+Cora_Static   GCN            EdgeFlip StructuralDefense           0.7010          -0.0310      -0.4026     0.6830         0.9047             0.8665                -2.0688          0.0053              0.4263             0.4626
+Cora_Static   GCN FeaturePerturbation     HybridDefense           0.2440           0.0590       0.0946     0.2123         0.6667             0.3016                 0.0000          0.0058              0.5870             0.5133
+Cora_Static   GCN FeaturePerturbation   OntologyDefense           0.1410          -0.0440      -0.0705     0.1069         0.6196             0.1743                 0.0000          0.0056              0.6128             0.4648
+Cora_Static   GCN FeaturePerturbation StructuralDefense           0.2220           0.0370       0.0593     0.1693         0.6536             0.2744                 0.0000          0.0053              0.5583             0.5278
+Cora_Static   GCN       GradientBased     HybridDefense           0.8380           0.8290       1.0362     0.7441         0.9752             1.0358                 0.0000          0.0058              0.2937             0.6264
+Cora_Static   GCN       GradientBased   OntologyDefense           0.2160           0.2070       0.2587     0.1652         0.4063             0.2670                 0.0000          0.0050              0.3431             0.5974
+Cora_Static   GCN       GradientBased StructuralDefense           0.8830           0.8740       1.0925     0.8631         0.9672             1.0915                 0.0000          0.0054              0.2874             0.5975
+Cora_Static   GCN           Metattack     HybridDefense           0.6120          -0.1690      -6.0357     0.6038         0.8416             0.7565                -2.0683          0.0057              0.4582             0.5026
+Cora_Static   GCN           Metattack   OntologyDefense           0.5810          -0.2000      -7.1429     0.5716         0.7763             0.7182                -2.4734          0.0052              0.4912             0.4790
+Cora_Static   GCN           Metattack StructuralDefense           0.6970          -0.0840      -3.0000     0.6916         0.9219             0.8616                -1.8583          0.0053              0.4403             0.4800
+Cora_Static   GCN             Nettack     HybridDefense           0.6240          -0.1380      -2.9362     0.6176         0.8384             0.7713                -2.2650          0.0057              0.4626             0.4941
+Cora_Static   GCN             Nettack   OntologyDefense           0.5710          -0.1910      -4.0638     0.5564         0.7678             0.7058                -2.6417          0.0052              0.4923             0.5173
+Cora_Static   GCN             Nettack StructuralDefense           0.6870          -0.0750      -1.5957     0.6784         0.9154             0.8492                -2.0953          0.0054              0.4480             0.4758
+Cora_Static   GCN     RandomStructure     HybridDefense           0.6560          -0.1300      -5.6522     0.6535         0.8372             0.8109                -2.8482          0.0057              0.4386             0.5188
+Cora_Static   GCN     RandomStructure   OntologyDefense           0.5800          -0.2060      -8.9565     0.5670         0.7685             0.7169                -3.7318          0.0052              0.4901             0.5166
+Cora_Static   GCN     RandomStructure StructuralDefense           0.7350          -0.0510      -2.2174     0.7172         0.9283             0.9085                -2.5259          0.0053              0.4159             0.4883
 
-FINAL TABLE (POST-DEFENSE)
-Model,Attack,Accuracy,Macro F1,ROC-AUC,Accuracy Drop,Perturbation Budget
-GCN,Baseline,0.821,0.8069762378934343,0.969767490029393,0.0,0.0
-GCN,Evasion: Gradient (FGSM-like),0.003,0.002306813017311427,0.046365124715092076,0.818,0.1
-GCN,Defense: Smoothing (alpha=0.3),0.004,0.0028679361652918047,0.05370953225557492,0.817,0.7
-GCN,Defense: Pruning (top-k=10),0.002,0.001747487986020096,0.03550002268462344,0.819,0.5
-GCN,Defense: Ontology: Full + Retrain,0.852,0.8606992981015603,0.98568707949535,-0.031000000000000028,0.3
-GCN,Defense: Full Ontology + Pruning (k=15) + Retrain,0.895,0.9016502837154915,0.9896864282620069,-0.07400000000000007,0.5
-GAT,Baseline,0.805,0.7915324514197838,0.9667047423240094,0.0,0.0
-GAT,Evasion: Gradient (FGSM-like),0.043,0.019257526255578344,0.08650754106516749,0.762,0.1
-GAT,Defense: Smoothing (alpha=0.85),0.04,0.017602096870389557,0.08407498414493585,0.765,0.7
-GAT,Defense: Pruning (top-k=10),0.045,0.019845505363894567,0.08233621077021828,0.76,0.5
-GAT,Defense: Ontology: Full + Retrain,0.812,0.8206794880543095,0.9793580895714958,-0.007000000000000006,0.3
-GAT,Defense: Full Ontology + Pruning (k=15) + Retrain,0.84,0.8440283980958088,0.9822787742044152,-0.03499999999999992,0.5
-
+========================================================================================================================
+DYNAMIC DATASET SUMMARY (AVG OVER SNAPSHOTS)
+========================================================================================================================
+Model              Attack           Defense AttackedAccuracy DefendedAccuracy AccuracyRecovery DefendedF1 RobustnessDefended
+  GAT            EdgeFlip     HybridDefense           0.7100           0.5980          -0.1120     0.5887             0.7364
+  GAT            EdgeFlip   OntologyDefense           0.7100           0.5200          -0.1900     0.5066             0.6403
+  GAT            EdgeFlip StructuralDefense           0.7100           0.6940          -0.0160     0.6811             0.8547
+  GAT FeaturePerturbation     HybridDefense           0.2610           0.1935          -0.0675     0.1889             0.2381
+  GAT FeaturePerturbation   OntologyDefense           0.2610           0.0995          -0.1615     0.0642             0.1224
+  GAT FeaturePerturbation StructuralDefense           0.2610           0.1815          -0.0795     0.1610             0.2233
+  GAT       GradientBased     HybridDefense           0.0045           0.4805           0.4760     0.3702             0.5915
+  GAT       GradientBased   OntologyDefense           0.0045           0.2815           0.2770     0.1403             0.3461
+  GAT       GradientBased StructuralDefense           0.0045           0.4400           0.4355     0.3563             0.5419
+  GAT           Metattack     HybridDefense           0.7670           0.6015          -0.1655     0.5959             0.7407
+  GAT           Metattack   OntologyDefense           0.7670           0.4450          -0.3220     0.4441             0.5482
+  GAT           Metattack StructuralDefense           0.7670           0.6940          -0.0730     0.6816             0.8547
+  GAT             Nettack     HybridDefense           0.7530           0.5760          -0.1770     0.5652             0.7093
+  GAT             Nettack   OntologyDefense           0.7530           0.5090          -0.2440     0.4925             0.6268
+  GAT             Nettack StructuralDefense           0.7530           0.6540          -0.0990     0.6441             0.8054
+  GAT     RandomStructure     HybridDefense           0.7935           0.5990          -0.1945     0.5951             0.7377
+  GAT     RandomStructure   OntologyDefense           0.7935           0.4225          -0.3710     0.4095             0.5200
+  GAT     RandomStructure StructuralDefense           0.7935           0.7025          -0.0910     0.6948             0.8652
+  GCN            EdgeFlip     HybridDefense           0.7325           0.6330          -0.0995     0.6319             0.7830
+  GCN            EdgeFlip   OntologyDefense           0.7325           0.5670          -0.1655     0.5552             0.7013
+  GCN            EdgeFlip StructuralDefense           0.7325           0.6760          -0.0565     0.6641             0.8361
+  GCN FeaturePerturbation     HybridDefense           0.2260           0.2090          -0.0170     0.1925             0.2584
+  GCN FeaturePerturbation   OntologyDefense           0.2260           0.3295           0.1035     0.1227             0.4075
+  GCN FeaturePerturbation StructuralDefense           0.2260           0.2550           0.0290     0.2297             0.3153
+  GCN       GradientBased     HybridDefense           0.0095           0.7595           0.7500     0.6903             0.9392
+  GCN       GradientBased   OntologyDefense           0.0095           0.1995           0.1900     0.1402             0.2468
+  GCN       GradientBased StructuralDefense           0.0095           0.8035           0.7940     0.7166             0.9938
+  GCN           Metattack     HybridDefense           0.7885           0.6210          -0.1675     0.6159             0.7681
+  GCN           Metattack   OntologyDefense           0.7885           0.5760          -0.2125     0.5638             0.7124
+  GCN           Metattack StructuralDefense           0.7885           0.6815          -0.1070     0.6620             0.8429
+  GCN             Nettack     HybridDefense           0.7765           0.6245          -0.1520     0.6198             0.7724
+  GCN             Nettack   OntologyDefense           0.7765           0.5765          -0.2000     0.5658             0.7130
+  GCN             Nettack StructuralDefense           0.7765           0.6405          -0.1360     0.6359             0.7921
+  GCN     RandomStructure     HybridDefense           0.7570           0.6180          -0.1390     0.6188             0.7644
+  GCN     RandomStructure   OntologyDefense           0.7570           0.5625          -0.1945     0.5503             0.6958
+  GCN     RandomStructure StructuralDefense           0.7570           0.7075          -0.0495     0.6931             0.8751

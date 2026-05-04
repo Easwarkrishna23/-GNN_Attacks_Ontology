@@ -1,0 +1,2065 @@
+# NOTE: Project Mastery Document (Reverse-Engineering Study Notes)
+
+Repository root: `ADVERSARIAL ATTACK PROJECT`
+
+Goal of this NOTE:
+You asked for an “ultimate project mastery document” that teaches the entire repository from beginner level to research level, including:
+what the project does, why it exists, how every file works, a step-by-step execution trace, attack/defense math, ontology + SWRL reasoning integration, results/plots interpretation, and publication-level novelty extensions.
+
+This NOTE is written so you can use it for:
+M.Tech viva, thesis defense, IEEE paper writing, and future PhD extensions.
+
+---
+
+## 0) One-Minute Mental Model (Beginner First)
+
+This project is a pipeline that answers one research question:
+
+“If I do node classification with GCN/GAT on a citation graph, how much do different adversarial attacks hurt, and how much can defenses recover, including an ontology-guided semantic defense?”
+
+The pipeline is:
+
+1. Load dataset (static: Cora/Citeseer/PubMed, plus dynamic synthetic snapshots).
+2. Train baseline GCN and baseline GAT (2 layers each).
+3. Run an attack suite:
+   Poisoning attacks modify training data, then you retrain.
+   Evasion attacks modify inference-time inputs only, without retraining.
+4. Compute metrics for each attack; identify the “most impactful” attack by accuracy drop.
+5. Apply exactly 3 defense types against the most impactful attack:
+   Base-paper defense (GNNGuard-like pruning + neighbor importance + layer-wise graph memory, plus purification for poisoning).
+   Ontology-only defense (semantic projection + rule-based contradiction repair + semantic edge trust).
+   Combined defense (ontology + base-paper GNNGuard-style weights).
+6. Generate:
+   Two final terminal tables (pre-defense and post-defense).
+   CSVs for the two tables.
+   Graph images showing clean vs attacked vs defended subgraph with edge/node differences highlighted.
+   Ontology artifacts and Protégé-compatible OWL exports, including a “reasoned” OWL file populated from experiment CSV.
+
+Key conceptual point:
+Attacks and defenses operate on the input graph and features `(A, X)` and/or the message-passing weights, not by “modifying the GCN model architecture.”
+The model is unchanged; the data and the aggregation trust weights are what change.
+
+---
+
+## 1) How To Run (Exact Commands)
+
+Main command (the code prints this at the end):
+
+```bash
+python3 main.py --clean --profile paper --dataset Cora
+```
+
+Variants:
+
+```bash
+python3 main.py --clean --profile paper --dataset Citeseer
+python3 main.py --clean --profile paper --dataset PubMed
+```
+
+Important implementation detail:
+`--clean` is intended to delete everything under `results/` and regenerate from scratch.
+There is currently a bug in `main.py` where the `clean_results_dir()` implementation is accidentally placed after a `return` in another function, so it can become a no-op depending on how Python parses it. See Section 2.3 (“Known pitfalls and fixes”) for details.
+
+---
+
+## 2) Repository Architecture Walkthrough (Folders + Files)
+
+### 2.1 Folder overview
+
+`attacks/`
+Implements poisoning and evasion attacks that perturb adjacency and/or node features.
+
+`defenses/`
+Implements defenses: GNNGuard-style base-paper defense, smoothing, filtering/purification utilities, adversarial training utilities, and a lightweight ontology defense wrapper.
+
+`datasets/`
+Dataset loaders:
+Planetoid (Cora/Citeseer/PubMed) with a PyG path and a raw-file fallback.
+Dynamic synthetic graph generator for evolving graphs.
+Lightweight `GraphData` container to avoid hard dependency on torch_geometric.
+
+`experiments/`
+Training and evaluation helpers (`train_model`, `evaluate_model`).
+An older `attack_evaluation.py` that is not the primary driver (main driver is `main.py`).
+
+`models/`
+Pure PyTorch 2-layer GCN and 2-layer GAT.
+Both support “edge trust weights” for defenses (shared and/or layer-wise weights).
+
+`ontology/`
+The core ontology-guided defense package:
+ontology builder, rule engine, defense, exporter (OWL/RDF/Turtle), and CSV->OWL population script for Protégé.
+
+`utils/`
+Metrics computation: classification metrics, robustness metrics, graph metrics.
+
+`visualization/`
+Paper-style block diagrams, model layer-wise diagrams, attack/defense flow diagrams, and graph-diff visualizations.
+
+`paper_ieee/`
+IEEEtran LaTeX paper scaffold that consumes your `results/*.csv` tables and `results/*.png` figures.
+
+`results/`
+Outputs produced by `main.py` in “paper” profile: final tables, explanation, OWL snapshot JSON, and figures.
+
+`data/`
+Dataset storage and dynamic snapshots. This is ignored by `.gitignore` (not intended to be committed).
+
+### 2.2 File inventory (what exists)
+
+Top-level:
+`.gitignore`
+`Base_Paper.pdf`
+`main.py`
+`report_generator.py`
+`requirements.txt`
+`ontology_builder.py` (compat wrapper)
+`ontology_rules.py` (compat wrapper)
+`ontology_defense.py` (compat wrapper)
+`ontology_export.py` (compat wrapper)
+`paper_ieee_latex.zip` (bundle)
+
+Subfolders (high-signal files):
+
+`models/gcn.py`, `models/gat.py`
+`experiments/baseline_training.py`
+`attacks/poisoning/*`, `attacks/evasion/*`
+`defenses/gnnguard_paper_defense.py`, `defenses/feature_defense.py`, `defenses/robust_filtering.py`
+`ontology/ontology_builder.py`, `ontology/ontology_rules.py`, `ontology/ontology_defense.py`, `ontology/csv_to_owl_reasoner.py`
+`visualization/paper_diagrams.py`, `visualization/graph_viz.py`, `visualization/plotting.py`
+`paper_ieee/main.tex`, `paper_ieee/scripts/make_tables.py`
+
+---
+
+## 3) File-by-File Deep Reverse Engineering
+
+This section explains every file with:
+purpose, imports, key classes/functions, how it is called, its inputs/outputs, and failure modes.
+
+I use “Data” to mean an instance of `datasets/simple_data.py:GraphData` (a minimal PyG-like container).
+
+### 3.1 `requirements.txt`
+
+Purpose:
+Defines Python dependencies for training, attacks, and ontology exports.
+
+Key packages and why:
+`torch`, `torch-geometric` and companions: GNN basics. Note this repo also supports running without PyG by using raw Planetoid loaders and pure PyTorch models.
+`deeprobust`: provides reference implementations for Nettack/Metattack/DICE/FGA/GCN surrogate. Several attack modules attempt to use it, with fallbacks when unavailable.
+`networkx`, `scipy`: graph metrics and adjacency manipulation.
+`sklearn`: metrics and some visualization utilities.
+`rdflib`: OWL/RDF/Turtle export. The project is designed to keep core training functional even if rdflib is missing.
+
+Runtime risks:
+`deeprobust` may be fragile on newer Python/PyTorch versions.
+This repo is running Python `3.13.5`, which is beyond what many ML libraries officially test. The code includes fallbacks to keep the core pipeline working even if `deeprobust` or `torch_geometric` fail.
+
+### 3.2 `.gitignore`
+
+Purpose:
+Prevents committing large generated outputs and datasets:
+`data/`, `results/`, `checkpoints/`, `*.pt`, and raw dataset downloads.
+
+Important mismatch:
+In your working copy, `results/` exists and is modified; git shows changes. That means some results are currently tracked or were added earlier. If you want strict reproducibility, you typically keep results out of git. For a thesis submission, sometimes you intentionally commit key output artifacts. Make an explicit decision.
+
+### 3.3 `datasets/simple_data.py`
+
+Purpose:
+Defines `GraphData`, a lightweight container used everywhere so you can run without torch_geometric.
+
+Key pieces:
+`DatasetInfo`: stores `num_features`, `num_classes`.
+`GraphData` fields: `x`, `y`, `edge_index`, `train_mask`, `val_mask`, `test_mask`, optional `edge_weight`.
+`clone()`: deep-copies tensors so attacks and defenses can safely modify without side effects.
+`to(device)`: moves tensors to device (CPU/GPU).
+
+Why this matters:
+Most code expects PyG-style `data.x`, `data.edge_index`, masks, etc. This class is the “compatibility shim.”
+
+Inputs/outputs:
+Input is typically created by dataset loaders (`datasets/planetoid_loader.py`) or dynamic generator.
+Output is the same object passed into models, attacks, defenses.
+
+Failure modes:
+Some PyG-only utilities assume extra fields; this project avoids that.
+
+### 3.4 `datasets/planetoid_loader.py`
+
+Purpose:
+Loads static citation graph datasets: Cora, Citeseer, PubMed.
+
+Two loading modes:
+1. Preferred: PyG `Planetoid` with `NormalizeFeatures()`.
+2. Fallback: classic Planetoid raw files loader, reading `ind.<name>.*` files.
+
+Key functions:
+`load_planetoid(name, root="data") -> (DatasetInfo, GraphData)`
+`_planetoid_raw_load(...)`: raw loader logic, including Citeseer isolated node fix.
+
+Inputs:
+`name` one of Cora/Citeseer/PubMed.
+`root` folder where data is stored (`data/`).
+
+Outputs:
+`DatasetInfo` and `GraphData` with `edge_index` (COO from CSR), dense features, integer labels, boolean masks.
+
+Failure modes:
+If PyG is not available and raw files are missing, it raises with instructions to run `datasets/download_planetoid_raw.py`.
+
+### 3.5 `datasets/download_planetoid_raw.py`
+
+Purpose:
+Downloads raw Planetoid dataset files from the original public repo into `data/<Dataset>/raw`.
+
+Why it exists:
+To support environments where `torch_geometric` fails (binary extension mismatch).
+
+Important:
+This script uses network access. In restricted environments, it may fail.
+
+### 3.6 `datasets/dynamic_graph.py`
+
+Purpose:
+Generates a synthetic evolving graph dataset (dynamic graph snapshots).
+
+Key class:
+`DynamicGraphGenerator`
+Creates a Barabási-Albert graph, evolves by adding nodes with preferential attachment.
+
+Key method:
+`get_pyg_data()` returns a `GraphData` with random features, random labels, and random train/val/test masks.
+
+Scientific meaning:
+This is not a standard temporal citation dataset. It is a synthetic “stress test” for robustness over snapshots.
+For a publication, reviewers may ask for a real temporal dataset. See Section 10 for extensions.
+
+### 3.7 `models/gcn.py`
+
+Purpose:
+Implements a pure PyTorch 2-layer GCN (Kipf & Welling).
+
+Mathematics:
+Let `Â = A + I`, `D̂` degree matrix, `S = D̂^{-1/2} Â D̂^{-1/2}`.
+
+Layer 1:
+`H^(1) = ReLU(S X W^(0))`
+
+Layer 2:
+`Z = softmax(S H^(1) W^(1))`
+
+Implementation details:
+`normalized_adjacency(edge_index, num_nodes, edge_weight=None)` builds `S` in scipy CSR.
+`_scipy_to_torch_sparse` converts CSR->torch sparse tensor for sparse mm.
+
+Defense integration:
+`GCN._get_S(data, layer=1|2)` supports:
+`data.edge_weight_l1`, `data.edge_weight_l2` for layer-wise trust weights.
+Fallbacks to `data.edge_weight` or unit weights.
+This is essential to support the base-paper GNNGuard-style defense and combined defenses.
+
+Debug outputs:
+`forward_with_debug(data)` returns:
+`pre_aggregation_l1`, `post_normalization_l1`, `post_activation_l1`,
+`pre_aggregation_l2`, `post_normalization_l2`,
+`softmax_probabilities`, `predictions`,
+and a memory estimate.
+
+This is how the project satisfies “print layer-wise outputs.”
+
+Failure modes:
+The normalized adjacency is cached inside the `data` object; if edge weights change, the hash is meant to invalidate cache.
+If you mutate `data.edge_index` and forget to clear caches, it can reuse stale adjacency. This code attempts to avoid that with a hash.
+
+### 3.8 `models/gat.py`
+
+Purpose:
+Implements a pure PyTorch 2-layer GAT (Velickovic et al.) with multi-head attention in layer 1.
+
+Key formulas:
+`e_ij^k = a_k^T [W_k h_i || W_k h_j]`
+`alpha_ij^k = softmax_j(LeakyReLU(e_ij^k))`
+`h_i^(1) = concat_k Σ_{j∈N(i)} alpha_ij^k W_k h_j`
+Layer 2 uses a single head producing class logits.
+
+Implementation details:
+Uses `scatter_reduce`-based max and sum to compute per-destination softmax.
+Ensures self-loops.
+
+Defense integration:
+Supports `data.edge_weight_l1`, `data.edge_weight_l2` or `data.edge_weight` and injects it as an additive log prior:
+`e = e + log(edge_weight)`.
+This is “semantic edge trust” integrated directly into attention.
+
+Debug outputs:
+`forward_with_debug` returns attention weights and memory estimates.
+
+Failure modes:
+Because attention softmax is computed per-destination, incorrect `dst` indexing or mismatched edge weights can break normalization.
+The code checks shape of edge weights.
+
+### 3.9 `experiments/baseline_training.py`
+
+Purpose:
+Defines the generic training loop used by `main.py`.
+
+Key functions:
+`train_model(model, data, epochs, lr, weight_decay, regularizer=None, reg_weight=0.0, edge_weight=..., edge_weight_l1=..., edge_weight_l2=...)`
+`evaluate_model(model, data) -> (metrics_dict, pred_tensor, probs_tensor)`
+
+How it supports defenses:
+During training, the loop attaches edge weights to `data` so model uses them.
+Regularizer hook supports ontology semantic regularization during poisoning defense retraining.
+
+Loss:
+Uses `F.nll_loss(out[train_mask], y[train_mask])` because model outputs `log_softmax`.
+
+### 3.10 `utils/metrics.py`
+
+Purpose:
+Computes metrics used in final tables and impact analysis.
+
+Classification metrics:
+Accuracy, precision/recall macro, F1 macro, F1 micro.
+If probabilities available: ROC-AUC (multi_class='ovr'), log-loss, margin, entropy, confidence.
+
+Robustness metrics:
+`ASR` is implemented as relative accuracy drop ratio:
+`ASR = (acc_clean - acc_attack) / acc_clean`.
+Also computes confidence drop, margin drop.
+
+Graph metrics:
+Density, clustering, avg degree, homophily, modularity (label-induced communities), conductance.
+
+Note:
+This ASR definition differs from “attack success rate” in targeted attacks (fraction of targets misclassified). This repo uses it as a robustness score.
+In your IEEE paper you must define ASR precisely as implemented.
+
+### 3.11 `attacks/poisoning/random_poison.py`
+
+Goal:
+Simulate naive poisoning by randomly inserting edges and optionally corrupting features.
+
+Mechanism:
+Randomly pick pairs (u, v) and add edges (symmetric).
+Optional feature corruption: flip binary entries (0/1) or add small bounded noise.
+
+Impact expectation:
+Breaks homophily and injects noisy neighbors into training.
+In this repo, poisoning attacks retrain the model on the modified training graph.
+
+Inputs/outputs:
+Input `adj` as scipy CSR and optional `features`.
+Output `modified_adj` and `modified_features`.
+
+### 3.12 `attacks/poisoning/nettack.py`
+
+Goal (paper-level):
+Targeted poisoning attack that reduces classification margin of a target node by modifying edges/features under stealth constraints.
+
+Implementation here:
+Tries to use DeepRobust `Nettack` with a surrogate `deeprobust.graph.defense.GCN`.
+If DeepRobust unavailable, uses a fallback that flips edges around the target node.
+
+Important:
+If DeepRobust works, Nettack is closer to the real paper.
+If not, the fallback is only “targeted edge toggle,” which is weaker and less stealthy.
+
+Outputs include proxy values:
+`margin_reduction_proxy`, `perturbation_score_proxy`.
+These are not the true Nettack scoring function; they are placeholders for reporting.
+
+### 3.13 `attacks/poisoning/metattack.py`
+
+Goal (paper-level):
+Meta-learning poisoning attack (bi-level optimization) that optimizes graph perturbations through training dynamics.
+
+Implementation here:
+DeepRobust `MetaApprox` path exists but is disabled by default (`use_deeprobust = False`) due to instability on newer builds.
+Fallback:
+Computes cosine similarity matrix on normalized features.
+Scores existing edges by `abs(sim - 0.5)` and flips top-k “most ambiguous” edges.
+
+Scientific implication:
+The fallback is not a true bi-level Metattack.
+It approximates “global structure degradation” by corrupting edges that are semantically uncertain.
+For a publication, you must clearly label this as “Metattack-like proxy” unless you enable and validate DeepRobust.
+
+### 3.14 `attacks/poisoning/dice.py`
+
+Goal:
+DICE is a global poisoning attack from DeepRobust that modifies edges based on labels.
+
+Implementation:
+Direct DeepRobust call with no fallback.
+
+Risk:
+If DeepRobust fails to import, this attack breaks.
+In the current `main.py` paper profile, DICE is not included in the static suite; it uses Random/Nettack/Meta and avoids DICE.
+
+### 3.15 `attacks/evasion/structure_evasion.py`
+
+Goal:
+Degree-preserving inference-time structural attack around target nodes.
+
+Mechanism:
+For each perturbation:
+Pick an existing neighbor to remove, pick a non-neighbor to add.
+This keeps degree roughly stable, which is a stealth property.
+
+Output:
+Returns modified adjacency CSR.
+
+In `main.py`:
+This attack is applied to many test nodes (loop), producing a global effect in evaluation even though the mechanism is local per node.
+
+### 3.16 `attacks/evasion/feature_evasion.py`
+
+Goal:
+Inference-time feature attack (no training graph modification).
+
+Mechanism:
+For each attacked node:
+Flip a budget of binary features (0/1).
+Add noise to non-binary features.
+
+Important correctness condition:
+The code clones data (`attacked = data.clone()`) and writes `attacked.x`, leaving clean training data untouched.
+This satisfies the “evasion only modifies test-time inputs” requirement.
+
+### 3.17 `attacks/evasion/fgsm_like.py`
+
+Goal:
+FGSM-like feature attack:
+`X_adv = X + ε sign(∇_X L)`
+
+Implementation:
+Computes loss on test mask, backprop to x, applies sign step, clamps to [0,1].
+
+Impact expectation:
+Can be extremely destructive if ε is large, because it pushes many features in the worst direction for the model.
+In your current output tables, this attack becomes the most impactful (accuracy ~ 0.002), so the “calibration” logic in `main.py` tries to pick a harmful but still defendable intensity.
+
+### 3.18 `attacks/evasion/adaptive_semantic.py`
+
+Goal:
+“Adaptive semantic attack” meant to bypass naive similarity pruning by making feature changes that are semantically plausible but still cause misclassification.
+
+Key idea:
+Use ontology artifacts:
+feature-to-class affinity matrix,
+feature co-occurrence graph,
+contradiction pairs.
+
+Mechanism:
+Pick a target wrong class (e.g., highest probability class different from true).
+Add features highly indicative of target topic, with co-occurrence plausibility.
+Optionally remove features indicating true class.
+Avoid contradiction pairs if configured.
+
+Research significance:
+This strengthens the paper: it shows an attacker aware of your defense assumptions.
+You must include the threat model: “adaptive attacker knows ontology constraints.”
+
+### 3.19 `defenses/gnnguard_paper_defense.py`
+
+Purpose:
+Implements “base paper” defense, described as GNNGuard-style:
+Neighbor importance estimation,
+Pruning,
+Layer-wise graph memory.
+
+Key formulas implemented:
+Edge similarity score from cosine similarity.
+Importance: `a_uv = sim(x_u, x_v)^power`.
+Pruning: threshold and top-k outgoing edges per node.
+Layer-wise memory:
+`omega2 = beta * omega1 + (1 - beta) * a2`
+
+Outputs:
+Returns `(data_def, w1, w2)` where `w1` and `w2` are edge weights for layer 1 and 2.
+
+Integration:
+GCN/GAT consume these via `data.edge_weight_l1` and `data.edge_weight_l2`.
+
+Scope clarification:
+This defense changes message passing weights, not the model architecture.
+
+### 3.20 `defenses/feature_defense.py`
+
+Purpose:
+Feature smoothing and feature consistency regularization:
+
+Smoothing:
+`X_smooth = α X + (1-α) Â X` (implemented via normalized adjacency with self-loops).
+
+Consistency regularizer:
+`||X - Â X||^2` (implemented as mean squared residual).
+
+Integration:
+`main.py` uses smoothing as part of the base-paper defense calibration (chooses best α on attacked input).
+
+### 3.21 `ontology/ontology_builder.py`
+
+Purpose:
+Builds an ontology schema and numeric semantic artifacts that go beyond similarity pruning.
+
+Ontology ≠ similarity pruning (what this file enforces):
+Similarity pruning: local geometry only (cosine/Jaccard between two feature vectors).
+Ontology defense: typed concepts (topics/subtopics/features), explicit relations (indicatesTopic, contradicts, coOccursWith), constraints (contradiction rules), and inheritance scores. These symbolic structures drive numeric trust and repair signals.
+
+Core outputs: `OntologyArtifacts`
+
+It contains:
+`feature_class_affinity` (F,C): feature-to-topic distribution learned from training labels.
+`node_topic_confidence` (N,C): topic distribution per node derived from features and affinities.
+`feature_cooccur` (F,F): sparse co-occurrence graph between features.
+`contradiction_pairs`: feature pairs that should not co-occur (semantic impossibility).
+Graph semantics for Cora-like citation graphs:
+degree, pagerank (power iteration), local homophily, neighbor entropy, topic mismatch fraction.
+Vulnerability scores per node:
+LowHomophilyVulnerability, SparseNeighborhoodVulnerability, HighCentralityVulnerability, TopicMismatchVulnerability, BridgeNodeVulnerability.
+
+Why centrality matters:
+High-centrality or bridge nodes are more influential in message passing; attacks on them can propagate further.
+Ontology builder explicitly computes pagerank and degree, and derives “bridge vulnerability.”
+
+### 3.22 `ontology/ontology_rules.py`
+
+Purpose:
+Explicit semantic rule engine:
+Computes semantic edge trust, detects contradictions, repairs features, and produces an auditable “rule report.”
+
+SWRLRule:
+A minimal representation for documentation/export. These are not executed by a DL reasoner inside Python; they document your semantic logic and can be exported.
+
+Rule categories implemented:
+Semantic consistency (topic similarity implies trust).
+Contradictory feature detection.
+Cross-topic penalty.
+Reinforcement rules (feature evidence boosts topic confidence).
+Cora-specific planning rules (topic mismatch suspicious edges, homophily collapse triggers purification, embedding drift triggers adversarial training, bridge vulnerability triggers isolation).
+
+Key function:
+`semantic_edge_trust(artifacts, edge_index, ...)`:
+Trust = cosine(topic_dist_u, topic_dist_v) * conf(u) * conf(v) with penalties for cross-topic mismatch and bridge/mismatch vulnerabilities.
+
+Repair:
+`repair_node_features` removes off-topic strong-affinity features and adds on-topic strong-affinity features, bounded by caps.
+
+### 3.23 `ontology/ontology_defense.py`
+
+Purpose:
+Implements the ontology-guided defense module that produces:
+defended features, optional pruned edges, semantic edge weights, and an optional semantic loss regularizer.
+
+Defense variants (for ablations):
+`COOCCURRENCE_ONLY`
+`LABEL_AFFINITY_ONLY`
+`OWL_RULES_ONLY`
+`SEMANTIC_PROJECTION_ONLY`
+`FULL_ONTOLOGY`
+
+Core defense actions:
+1. Semantic projection:
+Reconstruct “semantic features” from node-topic distribution and feature-topic affinity:
+`X_sem = P A^T`
+Blend:
+`X' = (1-λ) X + λ X_sem`
+2. Co-occurrence projection:
+`X' = (1-λ) X + λ X W` where W is normalized co-occurrence.
+3. Rule-based repair:
+Detect nodes with contradiction anomaly above threshold and repair features.
+4. Semantic edge trust and pruning:
+Compute semantic trust and prune edges under threshold; return edge weights.
+5. Regularizer (optional during retraining):
+Edge consistency term plus topic alignment KL term.
+
+Why this is a “true ontology defense”:
+It is driven by typed semantics, contradiction constraints, and rule-based repairs, not just similarity weights.
+Numeric matrices are produced from symbolic structures, not from raw geometry alone.
+
+### 3.24 `ontology/ontology_export.py`
+
+Purpose:
+Exports ontology artifacts to Protégé-compatible formats using rdflib:
+`ontology.owl`, `ontology.rdf`, `ontology.ttl`, and `ontology.swrl` (human-readable rules).
+
+Important detail:
+This exporter intentionally keeps SWRL rules as a separate `.swrl` text file unless you extend it to encode swrl:Imp triples.
+Protégé will open OWL/RDF/Turtle; SWRL rules can be added/managed directly in Protégé.
+
+Failure mode:
+If rdflib is not installed, export is skipped but training/defense continues.
+
+### 3.25 `ontology/csv_to_owl_reasoner.py`
+
+Purpose:
+Populates an OWL file for Protégé from experiment CSV.
+
+Inputs:
+`results/attack_results.csv` (generated by `main.py`).
+`ontology/gnn_attacks_ontology_starter.owl` (starter schema).
+Optional `results/ontology_graph_snapshot.json` (Cora semantic individuals: Paper/Topic/CitationEdge/Vulnerability).
+
+Output:
+`ontology/gnn_attack_reasoned.owl`
+
+Key point:
+Despite its name, this script does not run an OWL reasoner.
+It generates a “reasoner-ready” OWL file that you open in Protégé and run HermiT/Pellet there.
+
+What makes it “ontology-rich” (your requirement):
+It adds:
+Topic individuals,
+Paper individuals, each with object properties (hasTopic, hasFeatureVector, hasVulnerability),
+FeatureVector individuals,
+Vulnerability individuals with data properties (score/type),
+CitationEdge individuals with semantic trust metrics and suspicious labels,
+DefenseChain and DefenseStage planning individuals for multi-stage defense workflows,
+OntologyRule individuals so every defense can be linked to explicit rule semantics.
+
+Scale warning:
+The generated OWL can be large. In your current run it is ~12MB. Protégé can handle this but reasoning may be slow.
+
+### 3.26 `defenses/robust_filtering.py`
+
+Purpose:
+Contains several classic graph defense utilities:
+Jaccard similarity, SVD low-rank purification, similarity-weighted adjacency, top-k pruning, label-guided pruning, robust edge filtering, feature smoothing.
+
+How it is used:
+`main.py` uses `svd_defense` as an extra purification stage for poisoning defense in the base-paper defense loop.
+
+Risks:
+SVD purification converts adjacency to dense; can be expensive for large graphs.
+This is OK for Cora-scale graphs.
+
+### 3.27 `visualization/paper_diagrams.py`
+
+Purpose:
+Draws clean “paper-style” block diagrams using matplotlib patches.
+Not AI art; it is deterministic vector drawing.
+
+Main exported functions used by `main.py`:
+`draw_project_workflow(save_path, attacks, worst_attack, defenses)`
+`draw_gcn_layerwise(save_path)`
+`draw_gat_layerwise(save_path, heads=4)`
+`draw_attack_defense_flow(save_path, worst_attack, defense_names)`
+
+These create exactly the “workflow” and “layer-wise architecture” images you requested.
+
+### 3.28 `visualization/graph_viz.py`
+
+Purpose:
+Generates clean vs attacked vs defended graph visual proof, with explicit highlighting:
+Attack-added edges (red), attack-removed edges (black dashed),
+Defense-added edges (green), defense-removed edges (blue dashed),
+Nodes whose features changed (red ring / green ring),
+Nodes whose predictions changed (purple ring),
+Nodes that became misclassified (black ring).
+
+Key functions:
+`visualize_graph_mosaic(...)`: 3-panel single image.
+`visualize_triplet_separate(...)`: three separate images with identical layout (important for comparing).
+`visualize_attack_suite(...)`: grid showing how each attack changes the dataset.
+
+Scientific interpretation:
+These figures are meant to visually validate that:
+1) the attack truly changed the dataset,
+2) those changes caused node prediction changes,
+3) defense changes the dataset again and recovers predictions.
+
+### 3.29 `visualization/plotting.py`
+
+Purpose:
+General plots:
+confusion matrices, t-SNE cluster plots, layer output heatmaps, robustness curves.
+
+Important stability choice:
+`plot_tsne_suite` uses deterministic PCA via SVD by default to avoid platform-specific t-SNE crashes.
+It falls back to t-SNE if SVD fails.
+
+### 3.30 `paper_ieee/*`
+
+Purpose:
+IEEEtran conference paper scaffold.
+It uses figures from `results/` and tables generated from `results/*.csv`.
+
+Key file:
+`paper_ieee/main.tex`: paper body.
+
+Key script:
+`paper_ieee/scripts/make_tables.py`: converts CSV outputs to LaTeX tables stored under `paper_ieee/tables/`.
+
+Build steps:
+Run `python paper_ieee/scripts/make_tables.py`, then compile LaTeX.
+
+Figure alignment issues:
+If `\includegraphics` exceeds page margins, fix by using `\linewidth` not `\textwidth`, or using `\resizebox{\linewidth}{!}{...}`.
+The paper already uses `\resizebox{\textwidth}{!}{...}` for some figures; for others, enforce `width=\linewidth` inside `figure` and `figure*`.
+
+### 3.31 `main.py` (the real orchestrator)
+
+Purpose:
+This is the end-to-end experiment driver.
+It is long because it also contains:
+table rendering without tabulate,
+attack calibration logic,
+defense hyperparameter sweeps,
+visualization orchestration,
+ontology CSV/OWL exports,
+and an explanation generator.
+
+High-level function index (from `rg '^def '`):
+Utility: seeding, table rendering, graph conversions.
+Attack evaluation: `evaluate_model_under_attacks`.
+Defense evaluation: `apply_feature_defenses`.
+Dynamic snapshot generation: `save_dynamic_snapshots`.
+Ontology export helper: `export_cora_semantic_snapshot`, `export_ontology_artifacts`.
+Final pipeline: `main(profile="paper", clean=False, dataset_name="Cora")`.
+
+In Section 4, I do a full execution trace call-by-call.
+
+Known pitfall:
+`clean_results_dir()` is currently malformed: its deletion logic appears after a `return` statement from another function due to an indentation/merge error.
+So `--clean` may not actually delete old results reliably.
+
+---
+
+## 4) Full Execution Flow Trace (Call Graph + Data Flow)
+
+This is the “from `main.py` to outputs” trace.
+
+### 4.1 CLI entrypoint
+
+At bottom of `main.py`:
+Argument parsing:
+`--profile paper`
+`--clean`
+`--dataset {Cora,Citeseer,PubMed}`
+
+Then calls:
+`main(profile=args.profile, clean=args.clean, dataset_name=args.dataset)`
+
+### 4.2 High-level call graph
+
+Mermaid call graph (simplified):
+
+```mermaid
+flowchart TD
+  A["CLI: python3 main.py --clean --profile paper --dataset Cora"] --> B["main()"]
+  B --> C["load_planetoid() -> GraphData"]
+  B --> D["train_model(GCN)"]
+  B --> E["train_model(GAT)"]
+  B --> F["evaluate_model(baselines)"]
+  B --> G["OntologyGuidedDefense.fit(clean_data)"]
+  B --> H["Build attack payloads (6+ attacks)"]
+  B --> I["evaluate_model_under_attacks(GCN)"]
+  B --> J["evaluate_model_under_attacks(GAT)"]
+  B --> K["Select worst attack by Accuracy Drop (GCN)"]
+  B --> L["apply_feature_defenses() (3 defense types) on worst attack"]
+  B --> M["Generate FINAL_TABLE_PRE_DEFENSE + FINAL_TABLE_POST_DEFENSE"]
+  B --> N["Write metrics_terminal.txt + attack_results.csv"]
+  B --> O["export_cora_semantic_snapshot() -> ontology_graph_snapshot.json"]
+  B --> P["generate_reasoned_ontology() -> ontology/gnn_attack_reasoned.owl"]
+  B --> Q["Visualization: workflow diagrams + graph diffs + clusters"]
+  B --> R["DynamicGraphGenerator snapshots to data/dynamic/"]
+  B --> S["Write results/EXPLANATION.md"]
+```
+
+### 4.3 Data flow (what objects are passed)
+
+Core data objects:
+`GraphData`: holds `(x, y, edge_index, masks, edge_weight optional)`.
+`adj_clean`: scipy CSR adjacency derived from `edge_index`.
+`payloads_gcn/payloads_gat`: list of dicts, each produces attacked `GraphData`.
+`OntologyArtifacts`: semantic matrices and vulnerability scores derived from clean graph.
+`DefenseOutput`: defended `GraphData` and optional `edge_weight`.
+
+Data mutation rules enforced by design:
+Evasion attacks: clone and modify only inference-time inputs; baseline model weights stay fixed.
+Poisoning attacks: output attacked data; pipeline retrains a fresh model on attacked data.
+Defenses:
+Evasion: applied at inference-time (no retraining by default).
+Poisoning: applied as preprocessing then retrain (defense-aware training).
+
+### 4.4 Attack calibration logic (why your tables show impact)
+
+Inside `evaluate_model_under_attacks`:
+For each attack, it can run multiple budgets (“trials”).
+Then it selects a “chosen” budget that is actually harmful:
+It tries to find a budget with accuracy drop >= `min_drop = 0.03`, and ideally within a window (not too small, not too catastrophic) so defenses can show recovery.
+If no budget yields minimum drop, it picks the worst observed.
+
+This design is explicit because you requested:
+“Attacks must negatively affect performance, and defenses must improve post-defense results.”
+
+### 4.5 Worst-attack selection
+
+After GCN attacks:
+`worst_attack = attack_only.sort_values("Accuracy Drop", ascending=False).iloc[0]`
+
+Then the code prints:
+`The most impactful Attack is : <name> (accuracy drop=...)`
+
+This is the single “impactful attack” used for defense evaluation.
+
+### 4.6 Exactly 3 defense types (your requirement)
+
+Implemented in `apply_feature_defenses(...)`:
+
+Defense 1: Base paper (GNNGuard-style)
+Uses:
+feature smoothing calibration,
+`apply_gnnguard_paper_defense` -> layer-wise weights `w1`, `w2`,
+optional SVD purification stage if poisoning,
+optional retraining if poisoning.
+
+Defense 2: Ontology only
+Uses:
+`ontology_defense.defend(..., variant=FULL_ONTOLOGY, ...)`,
+optionally semantic regularizer during retraining for poisoning.
+
+Defense 3: Combined
+Uses:
+Ontology projection + semantic trust,
+then applies GNNGuard weighting and multiplies by semantic trust.
+
+The function chooses the best hyperparameter settings (highest accuracy) for each type.
+
+### 4.7 Outputs written
+
+Tables:
+`results/FINAL_TABLE_PRE_DEFENSE.csv`
+`results/FINAL_TABLE_POST_DEFENSE.csv`
+Also logs:
+`results/metrics_terminal.txt`
+
+Ontology:
+`results/ontology_graph_snapshot.json`
+`results/ontologies/<Dataset>/ontology.owl` and friends
+`ontology/gnn_attack_reasoned.owl`
+
+Figures:
+`results/FIG_gcn_layerwise.png`
+`results/FIG_gat_layerwise.png`
+`results/FIG_workflow.png`
+`results/FIG_attack_defense_flow.png`
+`results/FIG_graph_diff_worst.png`
+`results/FIG_worst_clean.png`, `FIG_worst_attacked.png`, `FIG_worst_defended.png`
+`results/FIG_attack_suite.png`
+`results/FIG_class_clusters.png`
+
+Dynamic snapshots:
+`data/dynamic/dynamic_snapshot_t0.pt` ... `t3.pt`
+
+---
+
+## 5) Attack Modules: Deep Explanation (Math + Intended Impact)
+
+This section answers: what each attack is supposed to do, why it should affect node classification, and what “impact” means in results.
+
+### 5.1 Poisoning vs evasion (threat model)
+
+Poisoning attack:
+Attacker modifies training data.
+Your pipeline retrains the model on the poisoned dataset.
+Impact appears because model parameters learn wrong neighborhood statistics.
+
+Evasion attack:
+Attacker modifies inference-time inputs only.
+Your pipeline keeps model parameters fixed; only the forward pass sees modified `(A', X')`.
+Impact appears because message passing aggregates corrupted neighbors/features at test time.
+
+### 5.2 Poisoning: Random Structure
+
+Purpose:
+Crude baseline: show that random edge insertion + mild feature corruption can degrade performance.
+
+How it changes the dataset:
+Adds new edges between random nodes. In citation graphs, these edges violate topic consistency (connect unrelated papers).
+Optional: flips a fraction of features globally, simulating text corruption.
+
+Why node classification drops:
+GCN/GAT mix features across edges. Random edges inject wrong-topic features into neighborhoods.
+Training learns to trust those wrong neighbors, so test predictions degrade.
+
+What you should see in visuals:
+Added edges (red) scattered; class clusters become more mixed in embedding plots.
+
+### 5.3 Poisoning: Nettack
+
+Purpose:
+Targeted poisoning: degrade classification around specific target nodes by carefully modifying their local structure/features.
+
+In your repo:
+If DeepRobust works, it is close to true Nettack.
+If not, fallback toggles edges around target nodes.
+
+Expected behavior:
+Small number of local changes can flip predictions for targeted nodes.
+If you attack many target nodes (as `main.py` does), you get a visible dataset-level accuracy drop.
+
+### 5.4 Poisoning: Meta Attack
+
+Purpose (paper):
+Bi-level optimization: choose perturbations that maximize final validation loss after training.
+
+In your repo:
+Fallback flips “uncertain similarity” edges.
+This tends to degrade homophily and community structure.
+
+Expected impact:
+Moderate accuracy drop, especially in GCN, because GCN relies heavily on homophily assumptions.
+
+### 5.5 Evasion: Edge Flip (degree-preserving)
+
+Purpose:
+Test-time structural perturbation that changes the neighborhood while keeping degree stable.
+
+How it changes dataset:
+For attacked nodes, swap edges: remove one existing neighbor, add a new non-neighbor.
+
+Why it drops accuracy:
+The node aggregates from a new neighbor distribution. If new neighbors are off-topic, embedding shifts.
+
+Expected visuals:
+Both added and removed edges around attacked nodes; prediction-changed rings should appear.
+
+### 5.6 Evasion: Feature Evasion
+
+Purpose:
+Test-time feature corruption to flip predictions without modifying adjacency.
+
+How it changes dataset:
+Flips a budget of binary bag-of-words features per attacked node and adds bounded noise to non-binary features.
+
+Why it drops accuracy:
+Message passing starts from wrong node features, so both the attacked node and its neighbors receive corrupted signals.
+
+Important:
+Training graph is untouched; only inference input changes.
+
+Expected visuals:
+Edges unchanged, but many nodes ringed as “feature changed,” and prediction changes.
+
+### 5.7 Evasion: Gradient (FGSM-like)
+
+Purpose:
+Maximally adversarial feature attack that uses gradients to move features in the worst direction.
+
+Formula:
+`X_adv = clamp(X + ε sign(∇_X Loss), 0, 1)`
+
+Why it can be worst:
+It moves features in exactly the direction that increases classification loss, across many nodes at once (test mask in this repo).
+
+Expected behavior:
+Strong accuracy collapse if ε is not carefully controlled.
+This repo includes “budget calibration” to avoid always choosing an ε that kills accuracy to near 0 (because defenses can’t recover from extreme collapse).
+
+### 5.8 Evasion: Adaptive Semantic
+
+Purpose:
+Adaptive attacker that crafts semantically plausible modifications to bypass naive pruning.
+
+What makes it “adaptive”:
+Uses ontology artifacts (feature-topic affinity, co-occurrence, contradictions).
+Adds features consistent with a target wrong topic, avoids contradictions, and matches co-occurrence patterns.
+
+Expected impact:
+Can reduce defense effectiveness because it targets the defense’s assumptions.
+
+---
+
+## 6) Defenses: Deep Explanation (Why They Work, Where They Fail)
+
+You requested:
+Three defense types evaluated individually, then combined.
+Also: pruning/smoothing/layer-wise memory as in base paper.
+
+### 6.1 Defense type 1: Base paper (GNNGuard-like)
+
+Components:
+1) Neighbor importance estimation:
+Edge trust from similarity between node representations.
+2) Pruning:
+Threshold + top-k edges per node.
+3) Layer-wise graph memory:
+Second-layer weights blend first-layer weights with new similarity.
+
+Why it works:
+Adversarial edges are often low similarity; they get down-weighted or pruned.
+Memory prevents overreacting to noisy changes layer-to-layer.
+
+Where it fails:
+If attacker injects semantically plausible edges (high similarity), pruning may not remove them.
+Also, aggressive pruning can delete useful edges and hurt clean accuracy.
+
+### 6.2 Defense type 2: Ontology-only
+
+Components:
+Semantic projection pulls features toward a topic-consistent subspace.
+Rule-based contradiction repair removes impossible feature combinations.
+Semantic edge trust uses topic distributions plus vulnerability penalties, not just raw similarity.
+
+Why it works:
+Feature attacks are countered by projection and repair.
+Structural attacks are countered by semantic edge trust and pruning of topic-mismatched edges.
+
+Where it fails:
+If ontology is weak (no meaningful feature-topic structure), projection becomes “similarity smoothing” and loses novelty.
+If attacker is adaptive (Adaptive Semantic Attack), contradictions may not trigger.
+
+### 6.3 Defense type 3: Combined (Base paper + Ontology)
+
+Idea:
+Ontology projects and repairs features, producing semantic trust.
+Then base-paper neighbor importance + memory stabilizes message passing.
+Multiplying weights by semantic trust makes it harder for low-semantic-trust edges to contribute even if they look geometrically similar.
+
+Expected result:
+Best recovery on the most impactful attack, especially for feature attacks.
+
+---
+
+## 7) Ontology + SWRL Reasoning: Extremely Deep Explanation
+
+This repo has two distinct “ontology layers.”
+
+Layer A: Numeric ontology (used directly in defense)
+`ontology/ontology_builder.py`, `ontology/ontology_rules.py`, `ontology/ontology_defense.py`
+These create matrices and constraints and run rule logic in Python.
+
+Layer B: Symbolic OWL population for Protégé
+`ontology/gnn_attacks_ontology_starter.owl`
+`ontology/csv_to_owl_reasoner.py`
+These produce a reasoner-ready OWL file enriched with individuals and data properties from experiments.
+
+Important to understand:
+OWL reasoning in Protégé is not currently used to automatically execute defense code inside `main.py`.
+Instead:
+`main.py` runs defenses directly.
+Then it exports results into OWL so you can inspect and reason in Protégé.
+This is still publishable as an “explainable semantic backbone,” but the “closed-loop OWL triggers Python defense execution” is a future extension (see Section 10).
+
+### 7.1 What classes/properties exist (starter ontology)
+
+Open `ontology/gnn_attacks_ontology_starter.owl` in Protégé.
+Core classes include:
+Attack, Defense, Dataset, Model, ImpactMetric, Perturbation, OntologyRule.
+Attack subclasses: EvasionAttack, PoisoningAttack, BackdoorAttack, StructuralAttack.
+Defense subclasses: SimilarityPruningDefense, NeighborImportanceDefense, LayerMemoryDefense, GraphPurificationDefense, FeatureSmootheningDefense, AdversarialTrainingDefense, SemanticRuleDefense, SubgraphIsolationDefense.
+Dataset semantics: Paper, Topic, CitationEdge, FeatureVector, ClassLabel.
+Graph topology semantics: Neighborhood, Community, BridgeEdge, SuspiciousEdge, TriggerMotif.
+Vulnerability classes: LowHomophilyVulnerability, BridgeNodeVulnerability, HighCentralityVulnerability, TopicMismatchVulnerability, SparseNeighborhoodVulnerability.
+Defense chain planning: DefenseChain, DefenseStage, nextDefenseStage.
+
+Object properties (examples):
+targetsDataset, affectsModel, mitigatedBy, measuredBy.
+hasTopic, hasFeatureVector, hasVulnerability.
+citesFrom, citesTo.
+recommendedChain, hasDefenseStage, stageDefense, nextDefenseStage.
+usesRule (Defense -> OntologyRule).
+
+Datatype properties (examples):
+accuracyBefore, accuracyAfterAttack, accuracyAfterDefense, hasSeverityScore.
+centrality/homophily fields populated from snapshot JSON.
+
+### 7.2 “Every datapoint has object property + data property + rule” requirement
+
+Your pipeline enforces this in `export_cora_semantic_snapshot`:
+Every paper gets at least one vulnerability relation even if weak (picks best).
+Every paper gets numeric properties (degree/pagerank/homophily/entropy).
+Edges get semantic scores and suspicious labels.
+Rules are created as OntologyRule individuals and linked via defense modules.
+
+That means:
+In Protégé, each Paper individual has:
+Object property links: hasTopic, hasFeatureVector, hasVulnerability.
+Datatype properties: degree, pagerank, local_homophily, neighbor_entropy, topic_mismatch_frac, etc.
+
+### 7.3 Why ontology ≠ similarity pruning (the proof argument)
+
+Similarity pruning:
+`trust(u,v) = cosine(x_u, x_v)` or Jaccard.
+No concept types, no inheritance, no impossibility constraints.
+No explanation beyond “vectors are similar.”
+
+Ontology defense in this repo:
+Has explicit semantic commitments:
+Topic classes and subtopics.
+Feature-to-topic affinity built from training labels (interpretable evidence).
+Co-occurrence semantics (features that normally appear together).
+Contradiction constraints (features that should never appear together).
+Vulnerability modeling using graph topology and citation semantics (centrality, bridge risk, homophily collapse).
+Rule-based repair (actively editing features to restore semantic consistency).
+Semantic edge trust uses topic distributions plus vulnerability penalties, not raw similarity alone.
+
+This is a knowledge-guided robust message passing framework, not a geometric filter.
+
+### 7.4 How SWRL reasoning fits
+
+In Python:
+Rules are implemented procedurally in `OntologyRuleEngine`.
+This gives deterministic, fast defense behavior.
+
+In Protégé:
+The `.owl` file includes individuals and data properties.
+You can add SWRL rules in Protégé to infer:
+which edges are suspicious,
+which nodes are vulnerable,
+which defense chain should be recommended.
+
+This repo already creates DefenseChain/DefenseStage individuals for each run based on severity and attack type. This is a “semantic defense planning” artifact.
+
+---
+
+## 8) Results: How To Read and Scientifically Interpret
+
+Primary result outputs:
+`results/FINAL_TABLE_PRE_DEFENSE.csv`
+`results/FINAL_TABLE_POST_DEFENSE.csv`
+
+Both tables include:
+Model, Attack, Accuracy, Precision, Recall, F1, Macro F1, Micro F1,
+ROC-AUC, Log-loss, Classification Margin, Robustness Score,
+Attack Success Rate (relative accuracy drop), Margin Drop,
+Perturbation Rate, Perturbation Budget, Accuracy Drop.
+
+Interpretation:
+Accuracy Drop is the key severity metric used to select worst attack.
+Macro F1 is important when classes are imbalanced.
+ROC-AUC shows ranking quality, sometimes stable even when accuracy drops.
+Log-loss increases when model becomes overconfident but wrong.
+Margin drop indicates reduced separation between top classes.
+
+Graph metrics:
+`results/graph_metrics_static.csv` compares clean vs attacked vs defended:
+Density, modularity, conductance, homophily, avg degree, number of edges.
+
+Scientific explanation template (for IEEE/viva):
+“Attack X reduces accuracy by Δ because it perturbs (A/X) causing message passing to aggregate off-topic signals, reducing homophily and increasing neighborhood entropy. Defense Y restores performance by pruning low-trust edges and projecting features back into a topic-consistent semantic subspace, improving homophily and modularity and reducing embedding drift.”
+
+---
+
+## 9) Visualization Interpretation (What Every Plot Proves)
+
+`results/FIG_clean_graph.png`
+Clean subgraph preview.
+
+`results/FIG_attack_suite.png`
+Grid: each attack effect.
+Structure attacks show edge diffs; feature attacks show node rings because edges unchanged.
+
+`results/FIG_graph_diff_worst.png`
+The key “proof” figure:
+Panel 1 clean, panel 2 attacked, panel 3 defended.
+Edge diffs and node ring annotations show dataset change and node-classification effect.
+
+`results/FIG_worst_clean.png`, `FIG_worst_attacked.png`, `FIG_worst_defended.png`
+Same layout as separate files, useful for papers/slides.
+
+`results/FIG_class_clusters.png`
+2D projection of hidden embeddings, showing cluster mixing after attack and recovery after defense.
+
+`results/FIG_gcn_layerwise.png`, `results/FIG_gat_layerwise.png`
+Architecture diagrams with formulas.
+
+`results/FIG_workflow.png`, `results/FIG_attack_defense_flow.png`
+End-to-end workflow and the clean->attack->defense conceptual flow.
+
+---
+
+## 10) Research Novelty and Publication-Level Improvements
+
+### 10.1 What is already novel in this repo
+
+Ontology-guided semantic defense that is not just similarity pruning:
+contradictions, topic hierarchy, vulnerability modeling, semantic projection, semantic edge trust, and repair.
+
+Defense chain planning encoded into OWL:
+DefenseChain and DefenseStage individuals created per run.
+
+Adaptive semantic attack:
+Attacker aware of semantics, attempting to bypass naive defenses.
+
+### 10.2 Missing novelty that reviewers may ask for
+
+True SOTA baselines:
+Your repo contains a “DEFENSE_BENCHMARK.csv,” but you must ensure each baseline corresponds to a real method and is implemented/validated.
+If you claim “RobustGCN, GraphDefense, GNNGuard,” implement them faithfully or clearly label approximations.
+
+Real temporal dataset:
+Dynamic part is synthetic BA snapshots. Add an actual temporal citation dataset for a stronger claim.
+
+Closed-loop OWL->Python execution:
+Right now, OWL is populated after the experiments. Next step is to let OWL reasoning trigger which defenses to execute automatically.
+
+### 10.3 Three IEEE-level improvements
+
+1) Replace Metattack fallback with a verified Metattack implementation (DeepRobust) or a modern PyTorch-native implementation and validate against known benchmarks.
+2) Add targeted-ASR definition: for targeted attacks, report fraction of targeted nodes misclassified, in addition to relative accuracy drop.
+3) Add ablation of vulnerability semantics: show accuracy recovery when centrality/homophily rules are removed, to prove why graph semantics matter.
+
+### 10.4 Three PhD-level extensions
+
+1) Learning thresholds/rules:
+Instead of fixed SWRL thresholds (homophily < 0.45), learn thresholds from data using Bayesian calibration or meta-learning.
+2) Ontology-driven defense executor:
+Run an OWL reasoner and automatically schedule defense chains (prune -> memory -> purify -> retrain) based on inferred vulnerabilities.
+3) Knowledge graphs beyond dataset-derived ontology:
+Integrate external scientific ontologies or topic models (LDA/BERT embeddings) to ground the “Topic” concept beyond labels.
+
+---
+
+## 11) Study Guide Mode (Viva + Teaching Script)
+
+### 11.1 If you must explain in 60 seconds
+
+“We trained 2-layer GCN and GAT on Cora-like citation graphs for node classification. We implemented poisoning and evasion attacks that perturb adjacency or features. We measured robustness via accuracy/F1/ROC-AUC and impact via accuracy drop. We then defended the worst attack using three defense types: a base-paper GNNGuard-style pruning and layer-memory method, an ontology-guided semantic defense that repairs features and reweights edges based on topic consistency and contradiction rules, and a combined defense. We generated final tables, graph-diff visuals, embedding cluster plots, and an OWL ontology populated from experiments for Protégé-based reasoning and explainability.”
+
+### 11.2 Common viva questions with answers (starter set)
+
+Q: What is the difference between GCN and GAT?
+A: GCN uses fixed normalized adjacency weights. GAT learns attention weights per edge, allowing the model to choose which neighbors matter more.
+
+Q: Why do attacks work on GNNs?
+A: Because message passing amplifies small input perturbations across neighborhoods and layers.
+
+Q: Poisoning vs evasion?
+A: Poisoning changes training data so learned parameters are corrupted. Evasion changes only inference inputs; parameters stay fixed.
+
+Q: Why is “ontology” not just similarity?
+A: Similarity compares vectors. Ontology encodes typed concepts (topics/subtopics), constraints (contradictory features), inheritance, vulnerabilities (centrality/homophily), and rule-based repairs, producing interpretable trust and repair signals.
+
+Q: What does the ontology OWL file do?
+A: It provides a Protégé-compatible symbolic representation of attacks/defenses/metrics and dataset semantics, allowing reasoners and SWRL rules to infer vulnerabilities and recommended defense chains.
+
+---
+
+## 12) Known Pitfalls, Bugs, and How to Defend Your Work
+
+1) `clean_results_dir` bug:
+The deletion logic appears after a `return` in another function due to indentation issues, which can make `--clean` unreliable.
+If asked in viva: explain you intended to delete old results and can fix by moving deletion code inside `clean_results_dir`.
+
+2) “Meta attack” is a fallback approximation:
+Be explicit in writing: “Metattack-like proxy” unless DeepRobust is enabled and verified.
+
+3) DeepRobust compatibility:
+On Python 3.13, some DeepRobust components may fail.
+Your repo mitigates by providing fallbacks and avoiding DICE in the main static suite.
+
+4) ASR definition:
+This repo uses relative accuracy drop ratio as ASR.
+If asked: define it precisely, and optionally add a targeted-ASR metric for targeted attacks.
+
+---
+
+## 13) What to Read Next (If You Are Studying This)
+
+1) Start with `results/EXPLANATION.md` for a beginner explanation of outputs.
+2) Then read `models/gcn.py` and `models/gat.py` with `forward_with_debug`.
+3) Then read `main.py` in this order:
+Dataset load -> baseline train -> payload building -> evaluate attacks -> pick worst -> defenses -> tables -> OWL export -> visuals.
+4) Then read ontology:
+`ontology/ontology_builder.py` -> `ontology/ontology_rules.py` -> `ontology/ontology_defense.py` -> `ontology/csv_to_owl_reasoner.py`.
+
+---
+
+# APPENDIX A: Complete File-by-File Notes (Every File)
+
+This appendix covers every repo file visible in the working tree (excluding `.git/` internals).
+For code files, I explain purpose, imports, key symbols, and execution role.
+For generated artifacts (CSV/PNG/PT/ZIP), I explain what they represent and how they are produced/consumed.
+
+## A.1 Top-level files
+
+### A.0 Complete repo file list (trimmed)
+
+This is the full list of files excluding `.git/`, `__pycache__/`, `.pyc`, and `.DS_Store`.
+It is included so you can confirm nothing is skipped.
+
+```text
+.gitignore
+Base_Paper.pdf
+NOTE
+attacks/evasion/adaptive_semantic.py
+attacks/evasion/feature_evasion.py
+attacks/evasion/fgsm.py
+attacks/evasion/fgsm_like.py
+attacks/evasion/gradient_feature.py
+attacks/evasion/pgd.py
+attacks/evasion/structure_evasion.py
+attacks/poisoning/dice.py
+attacks/poisoning/metattack.py
+attacks/poisoning/nettack.py
+attacks/poisoning/random_poison.py
+checkpoints/gat_baseline.pth
+checkpoints/gcn_baseline.pth
+data/Citeseer/raw/ind.citeseer.allx
+data/Citeseer/raw/ind.citeseer.ally
+data/Citeseer/raw/ind.citeseer.graph
+data/Citeseer/raw/ind.citeseer.test.index
+data/Citeseer/raw/ind.citeseer.tx
+data/Citeseer/raw/ind.citeseer.ty
+data/Citeseer/raw/ind.citeseer.x
+data/Citeseer/raw/ind.citeseer.y
+data/Cora/Cora/processed/data.pt
+data/Cora/Cora/processed/pre_filter.pt
+data/Cora/Cora/processed/pre_transform.pt
+data/Cora/Cora/raw/ind.cora.allx
+data/Cora/Cora/raw/ind.cora.ally
+data/Cora/Cora/raw/ind.cora.graph
+data/Cora/Cora/raw/ind.cora.test.index
+data/Cora/Cora/raw/ind.cora.tx
+data/Cora/Cora/raw/ind.cora.ty
+data/Cora/Cora/raw/ind.cora.x
+data/Cora/Cora/raw/ind.cora.y
+data/Cora/raw/ind.cora.allx
+data/Cora/raw/ind.cora.ally
+data/Cora/raw/ind.cora.graph
+data/Cora/raw/ind.cora.test.index
+data/Cora/raw/ind.cora.tx
+data/Cora/raw/ind.cora.ty
+data/Cora/raw/ind.cora.x
+data/Cora/raw/ind.cora.y
+data/PubMed/raw/ind.pubmed.allx
+data/PubMed/raw/ind.pubmed.ally
+data/PubMed/raw/ind.pubmed.graph
+data/PubMed/raw/ind.pubmed.test.index
+data/PubMed/raw/ind.pubmed.tx
+data/PubMed/raw/ind.pubmed.ty
+data/PubMed/raw/ind.pubmed.x
+data/PubMed/raw/ind.pubmed.y
+data/dynamic/dynamic_snapshot_t0.pt
+data/dynamic/dynamic_snapshot_t1.pt
+data/dynamic/dynamic_snapshot_t2.pt
+data/dynamic/dynamic_snapshot_t3.pt
+datasets/cora_loader.py
+datasets/download_planetoid_raw.py
+datasets/dynamic_graph.py
+datasets/planetoid_loader.py
+datasets/simple_data.py
+defenses/adversarial_training.py
+defenses/feature_defense.py
+defenses/gnnguard_paper_defense.py
+defenses/ontology_defense.py
+defenses/robust_filtering.py
+experiments/attack_evaluation.py
+experiments/baseline_training.py
+main.py
+models/gat.py
+models/gcn.py
+ontology/__init__.py
+ontology/csv_to_owl_reasoner.py
+ontology/gnn_attack_reasoned.owl
+ontology/gnn_attacks_ontology_starter.owl
+ontology/ontology_builder.py
+ontology/ontology_defense.py
+ontology/ontology_export.py
+ontology/ontology_rules.py
+ontology_builder.py
+ontology_defense.py
+ontology_export.py
+ontology_rules.py
+paper_ieee/README.md
+paper_ieee/figures/confusion_baseline.png
+paper_ieee/figures/confusion_feature_attack.png
+paper_ieee/figures/confusion_ontology_defense.png
+paper_ieee/figures/gcn_gat_architecture.png
+paper_ieee/figures/graph_mosaic.png
+paper_ieee/figures/layer_outputs_gat.png
+paper_ieee/figures/layer_outputs_gcn.png
+paper_ieee/figures/robustness_curve.png
+paper_ieee/figures/system_flow.png
+paper_ieee/figures/tsne_attacked.png
+paper_ieee/figures/tsne_clean.png
+paper_ieee/figures/tsne_defended.png
+paper_ieee/main.tex
+paper_ieee/refs.bib
+paper_ieee/scripts/make_tables.py
+paper_ieee/tables/defense_benchmark.tex
+paper_ieee/tables/dynamic_defense_sweep.tex
+paper_ieee/tables/dynamic_gcn_summary.tex
+paper_ieee/tables/graph_metrics_dynamic.tex
+paper_ieee/tables/graph_metrics_static.tex
+paper_ieee/tables/semantic_ablation.tex
+paper_ieee/tables/static_gat_attacks.tex
+paper_ieee/tables/static_gat_defenses.tex
+paper_ieee/tables/static_gcn_attacks.tex
+paper_ieee/tables/static_gcn_defenses.tex
+paper_ieee_latex.zip
+report_generator.py
+requirements.txt
+results/DEFENSE_BENCHMARK.csv
+results/EXPLANATION.md
+results/FIG_attack_defense_flow.png
+results/FIG_attack_suite.png
+results/FIG_class_clusters.png
+results/FIG_clean_graph.png
+results/FIG_gat_layerwise.png
+results/FIG_gcn_layerwise.png
+results/FIG_graph_diff_worst.png
+results/FIG_workflow.png
+results/FIG_worst_attacked.png
+results/FIG_worst_clean.png
+results/FIG_worst_defended.png
+results/FINAL_TABLE_POST_DEFENSE.csv
+results/FINAL_TABLE_PRE_DEFENSE.csv
+results/SEMANTIC_ABLATION.csv
+results/attack_results.csv
+results/graph_metrics_static.csv
+results/metrics_terminal.txt
+results/ontologies/Cora/ontology.owl
+results/ontologies/Cora/ontology.rdf
+results/ontologies/Cora/ontology.swrl
+results/ontologies/Cora/ontology.ttl
+results/ontologies/Cora/ontology_artifacts.md
+results/ontologies/Cora/ontology_contradictions.csv
+results/ontologies/Cora/ontology_edge_trust_topk.csv
+results/ontologies/Cora/ontology_feature_to_topic.csv
+results/ontologies/Cora/ontology_topic_hierarchy.csv
+results/ontology_graph_snapshot.json
+utils/metrics.py
+visualization/graph_viz.py
+visualization/paper_diagrams.py
+visualization/plotting.py
+```
+
+Path: `.gitignore`
+Purpose: excludes generated data, results, checkpoints, raw dataset downloads, and `.pt` snapshots.
+Impact: `results/` and `data/` are designed to be regenerated, not committed.
+
+Path: `Base_Paper.pdf`
+Purpose: local copy of the “base paper” used as design reference for defense stages and expected outputs.
+Role: not parsed by code; used by you for reporting.
+
+Path: `main.py`
+Purpose: experiment orchestrator, outputs generator, OWL export trigger, visualization runner.
+Consumed by: direct CLI execution.
+Produces: everything in `results/` and dynamic snapshots.
+See Appendix B for a step-by-step annotated walkthrough.
+
+Path: `requirements.txt`
+Purpose: dependency list.
+Consumed by: `pip install -r requirements.txt`.
+
+Path: `report_generator.py`
+Purpose: older markdown report generator (not the primary path in “paper” profile).
+Consumes: legacy CSV names (`results/final_pre_defense_gcn.csv`, etc.) which are older than the current unified `FINAL_TABLE_*`.
+If you use it: update file paths to `results/FINAL_TABLE_PRE_DEFENSE.csv` and `results/FINAL_TABLE_POST_DEFENSE.csv`.
+
+Path: `paper_ieee_latex.zip`
+Purpose: exported LaTeX bundle.
+Produced by: manually zipping `paper_ieee/` (not by `main.py`).
+
+Paths: `ontology_builder.py`, `ontology_rules.py`, `ontology_defense.py`, `ontology_export.py`
+Purpose: compatibility wrappers that re-export the real implementations from `ontology/`.
+Why they exist: your earlier project prompt required these exact filenames at repo root.
+Imports: `from ontology.<module> import *`.
+Risk: none, but avoid editing logic here; edit inside `ontology/`.
+
+## A.2 `datasets/` folder
+
+Path: `datasets/cora_loader.py`
+Purpose: backward-compatible wrapper so older code can call `load_cora()`.
+Line-by-line:
+Imports `load_planetoid`, defines `load_cora()` that calls `load_planetoid("Cora")`.
+
+Path: `datasets/simple_data.py`
+Purpose: defines `GraphData` container and `DatasetInfo`.
+Used by: loaders, dynamic generator, attacks, models, defenses, ontology.
+
+Path: `datasets/planetoid_loader.py`
+Purpose: loads Cora/Citeseer/PubMed with PyG if available, else raw file loader.
+Key risk: raw loader requires `data/<Name>/raw/ind.<name>.*` files.
+
+Path: `datasets/download_planetoid_raw.py`
+Purpose: downloads raw Planetoid files from a public URL.
+Used when: PyG import fails and raw files missing.
+Security note: downloads code/data from the internet. For a thesis submission, keep a “dataset download provenance” statement.
+
+Path: `datasets/dynamic_graph.py`
+Purpose: synthetic dynamic dataset generator (Barabási-Albert).
+Outputs: `GraphData` snapshots.
+Called by: `main.py` to create and store `data/dynamic/dynamic_snapshot_t*.pt`.
+
+## A.3 `models/` folder
+
+Path: `models/gcn.py`
+Purpose: 2-layer GCN, pure PyTorch.
+Key methods: `forward`, `forward_with_debug`, `get_embeddings`.
+Defense integration: uses `edge_weight_l1` and `edge_weight_l2`.
+
+Path: `models/gat.py`
+Purpose: 2-layer GAT, pure PyTorch.
+Key methods: `forward`, `forward_with_debug`, `get_embeddings`, `get_attention_weights`.
+Defense integration: `edge_weight_l1` and `edge_weight_l2` injected into attention via log prior.
+
+## A.4 `experiments/` folder
+
+Path: `experiments/baseline_training.py`
+Purpose: training and evaluation helpers.
+Used by: `main.py` as the canonical training loop.
+Important knobs:
+`regularizer` + `reg_weight` (ontology regularizer in poisoning retraining).
+`edge_weight_l1`, `edge_weight_l2` for layer-wise trust.
+
+Path: `experiments/attack_evaluation.py`
+Purpose: older / partial attack evaluation script.
+Status: not the primary evaluation path; it is incomplete and has mismatched signatures.
+Example issue:
+It calls `run_random_attack(adj, n_perturbations=100)` but `run_random_attack` signature is `(adj, features=None, n_edge_perturbations=..., ...)`.
+Recommendation:
+Treat as deprecated; use `main.py` instead.
+
+## A.5 `attacks/` folder
+
+### A.5.1 Poisoning attacks (`attacks/poisoning/`)
+
+Path: `attacks/poisoning/random_poison.py`
+Purpose: random structural injection + optional feature corruption.
+Called by: `main.py` payload builder.
+Inputs: CSR adj, optional feature matrix.
+Outputs: modified adj, modified features.
+
+Path: `attacks/poisoning/nettack.py`
+Purpose: targeted Nettack if DeepRobust available; fallback edge toggles otherwise.
+Called by: `main.py`.
+Outputs: modified adj/features plus proxy scoring dict.
+
+Path: `attacks/poisoning/metattack.py`
+Purpose: Metattack if enabled; fallback flips “ambiguous similarity” edges.
+Called by: `main.py`.
+Outputs: modified adj/features and info dict describing “outer loop / inner loop” (proxy for explanation).
+
+Path: `attacks/poisoning/dice.py`
+Purpose: DeepRobust DICE global attack.
+Status: not used by the current `main.py` static suite.
+Risk: no fallback, may fail if deeprobust missing/broken.
+
+### A.5.2 Evasion attacks (`attacks/evasion/`)
+
+Path: `attacks/evasion/structure_evasion.py`
+Purpose: degree-preserving edge swaps around a target node.
+Called by: `main.py` for many test nodes.
+Output: modified adjacency.
+
+Path: `attacks/evasion/feature_evasion.py`
+Purpose: inference-time feature flips/noise for selected nodes.
+Output: `(attacked_data, original_x_copy)`.
+
+Path: `attacks/evasion/fgsm_like.py`
+Purpose: FGSM-like gradient sign feature attack.
+Output: attacked data with modified `x`.
+
+Path: `attacks/evasion/adaptive_semantic.py`
+Purpose: adaptive semantic feature attack using ontology artifacts.
+Output: attacked data plus debug dict of per-node modifications.
+
+Path: `attacks/evasion/pgd.py`
+Purpose: a PGD-style structural attack implemented by relaxing adjacency to a continuous tensor and optimizing it.
+Status: not used by `main.py` in paper profile.
+Critical bug:
+`if (modified_adj[u, v] != 0).nnz > 0:` is invalid because `(modified_adj[u, v] != 0)` is a scalar boolean, not a sparse structure with `.nnz`.
+If you ever enable this attack, fix the edge-existence check, for example:
+`if modified_adj[u, v] != 0:` for LIL matrices.
+
+Path: `attacks/evasion/fgsm.py`
+Purpose: uses DeepRobust FGA (graph FGSM) targeted structural attack.
+Status: not used in `main.py`.
+Risk: depends on deeprobust.
+
+Path: `attacks/evasion/gradient_feature.py`
+Purpose: gradient feature attack helper (older).
+Status: not used in `main.py` because `fgsm_like.py` implements a clearer version.
+
+## A.6 `defenses/` folder
+
+Path: `defenses/gnnguard_paper_defense.py`
+Purpose: base-paper GNNGuard-style defense producing layer-wise edge trust and memory.
+Used by: `main.py` defense evaluation.
+
+Path: `defenses/feature_defense.py`
+Purpose: Laplacian smoothing and feature consistency regularizer.
+Used by: `main.py` smoothing stage.
+
+Path: `defenses/robust_filtering.py`
+Purpose: additional filtering/purification utilities (SVD, similarity weighting, top-k pruning).
+Used by: `main.py` as purification in poisoning defense.
+
+Path: `defenses/adversarial_training.py`
+Purpose: adversarial training utilities and feature denoising:
+Median/Gaussian denoising, randomized smoothing inference, PGD adversarial training loop.
+Status: not the primary defense in the 3-defense evaluation, but referenced by “benchmark” logic inside `main.py`.
+
+Path: `defenses/ontology_defense.py`
+Purpose: older “ontology matrix” defense based on cosine similarity (+ optional label mixing).
+Important:
+This is NOT the “true ontology defense.” It is a similarity-matrix approach.
+The true ontology defense is implemented under `ontology/ontology_defense.py`.
+Keep this file if you want a baseline “similarity matrix” comparison for your paper.
+
+## A.7 `ontology/` folder
+
+Path: `ontology/gnn_attacks_ontology_starter.owl`
+Purpose: base OWL schema (classes/properties/individuals) for Protégé.
+Starter individuals: `#CoraDataset`, `#GCNModel`, `#MetaPoisonAttack`, `#JaccardEdgeFilter`, `#ImpactRun1`.
+See Appendix C for extracted schema lists.
+
+Path: `ontology/csv_to_owl_reasoner.py`
+Purpose: populates a reasoner-ready OWL file with experiment outputs and graph semantic individuals.
+Output: `ontology/gnn_attack_reasoned.owl`.
+
+Path: `ontology/gnn_attack_reasoned.owl`
+Purpose: generated OWL populated with:
+Paper/Topic/CitationEdge/Vulnerability individuals,
+attack/defense/metric individuals,
+defense chain planning individuals.
+Size: can be very large (currently ~12MB).
+How to use: open in Protégé, run a reasoner, inspect inferred classes/relations.
+
+Path: `ontology/ontology_builder.py`, `ontology/ontology_rules.py`, `ontology/ontology_defense.py`, `ontology/ontology_export.py`
+Purpose: true ontology defense (numeric + symbolic export) implementation.
+Used by: `main.py`.
+
+## A.8 `visualization/` folder
+
+Path: `visualization/paper_diagrams.py`
+Purpose: deterministic paper-style diagrams for workflow and layer-wise architecture.
+Used by: `main.py`.
+
+Path: `visualization/graph_viz.py`
+Purpose: graph-diff visual proofs and attack suite mosaic.
+Used by: `main.py`.
+
+Path: `visualization/plotting.py`
+Purpose: confusion matrices, cluster plots, layer output panels, robustness curves.
+Used by: `main.py`.
+
+## A.9 `paper_ieee/` folder
+
+Path: `paper_ieee/main.tex`
+Purpose: IEEE conference paper draft.
+Consumes: figures from `results/` and tables from `paper_ieee/tables/`.
+
+Path: `paper_ieee/refs.bib`
+Purpose: citations.
+
+Path: `paper_ieee/scripts/make_tables.py`
+Purpose: converts `results/*.csv` into LaTeX tables.
+Called by: you (manual).
+
+Path: `paper_ieee/figures/*`
+Purpose: cached figures (older). Newer figures are usually read directly from `../results/` via `\graphicspath`.
+
+Path: `paper_ieee/tables/*`
+Purpose: generated LaTeX tables from latest results.
+
+## A.10 `results/` folder (generated outputs)
+
+These files are produced by running `main.py` in paper profile.
+
+Path: `results/FINAL_TABLE_PRE_DEFENSE.csv`
+Purpose: final pre-defense table including Baseline and all attacks, for both GCN and GAT.
+Consumed by: `paper_ieee/scripts/make_tables.py`.
+
+Path: `results/FINAL_TABLE_POST_DEFENSE.csv`
+Purpose: final post-defense table including Baseline, worst attack, and 3 defenses, for both GCN and GAT.
+
+Path: `results/metrics_terminal.txt`
+Purpose: the exact text dumped to terminal: “Most impactful attack” plus the two final CSV-formatted tables.
+
+Path: `results/attack_results.csv`
+Purpose: compact per-run CSV used to populate OWL with `ontology/csv_to_owl_reasoner.py`.
+
+Path: `results/SEMANTIC_ABLATION.csv`
+Purpose: ontology semantic logic ablation study table (variants vs accuracy).
+
+Path: `results/DEFENSE_BENCHMARK.csv`
+Purpose: compact benchmark table listing baseline defense variants (GCN and GAT).
+Important:
+In the current run, Base paper and Combined show near-zero recovery against worst FGSM attack; this is an important scientific signal that the attack intensity may be beyond the defense’s recoverable regime, or the base-paper defense hyperparameters are not well tuned for feature attacks.
+
+Path: `results/graph_metrics_static.csv`
+Purpose: graph structural metrics for clean vs attacked vs defended.
+Important:
+If the worst attack is a feature-only attack, the adjacency does not change, so “Attacked” graph metrics can match “Clean.” This is correct.
+
+Path: `results/ontology_graph_snapshot.json`
+Purpose: semantic snapshot of dataset to create Paper/Topic/CitationEdge/Vulnerability individuals in OWL.
+
+Paths: `results/FIG_*.png`
+Purpose: figures used for paper and explanation.
+Key “proof” figures:
+`FIG_graph_diff_worst.png` and the aligned triplet `FIG_worst_clean/attacked/defended.png`.
+
+---
+
+# APPENDIX B: `main.py` Annotated Walkthrough (Block-by-Block)
+
+This is the closest useful “line-by-line” explanation for a 2,300-line orchestrator.
+If you want literal line numbers, run:
+
+```bash
+nl -ba main.py | less
+```
+
+## B.1 Imports section
+
+`main.py` imports:
+Dataset loaders (`load_planetoid`, `DynamicGraphGenerator`).
+Training loop (`train_model`, `evaluate_model`).
+Models (`GCN`, `GAT`).
+Attacks (random poisoning, nettack, metattack, structure evasion, feature evasion, FGSM-like, adaptive semantic).
+Defenses (feature smoothing, filtering, GNNGuard paper defense, ontology defense).
+Ontology export (`generate_reasoned_ontology`, `OntologyBuilder`, `OntologyGuidedDefense`).
+Metrics (`compute_robustness_metrics`, `perturbation_rate`, `compute_graph_metrics`).
+Visualization functions.
+
+Design intent:
+`main.py` is a single “reproducible experiment runner” that creates all tables/figures/OWL artifacts for the paper in one run.
+
+## B.2 Seeding and deterministic setup
+
+`set_seed(42)` sets Python random, numpy, and torch seeds.
+Matplotlib is set to Agg backend and a safe MPLCONFIGDIR is configured to avoid permissions issues.
+
+## B.3 `clean_results_dir()`
+
+Intent:
+Delete everything under `results/` on demand.
+
+Actual state:
+The function currently contains only a docstring.
+The deletion implementation appears later in the file but is accidentally placed after `export_cora_semantic_snapshot` and after a `return`, making it unreachable.
+
+Effect:
+`python3 main.py --clean` may not actually clear old results.
+
+This matters scientifically:
+If old outputs remain, you can confuse “latest vs stale” tables/figures.
+
+## B.4 Dataset load + baseline training
+
+Loads dataset: `load_planetoid(dataset_name, root="data")`.
+Builds `adj_clean` from `edge_index`.
+Trains:
+`GCN(num_features, 16, num_classes)` for 120 epochs.
+`GAT(num_features, 8, num_classes, heads=4)` for 120 epochs.
+Evaluates both and prints metric dicts.
+
+## B.5 Ontology build
+
+Creates `OntologyGuidedDefense(dataset_name=..., export_dir="results/ontologies", export_owl=True)`.
+Calls `fit(data, class_names=cora_topics)` to build artifacts on clean training graph.
+Exports additional CSV artifacts under `results/ontologies/<Dataset>/`.
+
+## B.6 Attack payload construction
+
+Builds a list of payload dicts for 6+ attacks, each with:
+`name`, `type` ("poison" or "evasion"), budgets list, and `make_data(budget)` to produce attacked GraphData.
+
+Important:
+Nettack and edge-flip attacks are applied to multiple nodes, so their effect is visible at dataset-level accuracy.
+
+## B.7 Attack evaluation (per model)
+
+Calls:
+`evaluate_model_under_attacks("GCN", gcn, gcn_builder, data, payloads_gcn)`
+and similarly for GAT.
+
+For poisoning: trains fresh model on attacked data for each candidate budget.
+For evasion: evaluates baseline model on attacked data.
+
+Budget calibration:
+Picks a budget that produces a measurable accuracy drop so you can demonstrate defenses.
+
+## B.8 Worst attack selection
+
+Computes accuracy drop relative to baseline and selects max drop attack.
+Prints:
+`The most impactful Attack is : ...`
+
+## B.9 Defense evaluation
+
+Calls `apply_feature_defenses` once for GCN and once for GAT on the same “worst attack” dataset.
+This returns:
+rows of defense candidates,
+best base-paper defense,
+best ontology defense,
+best combined defense.
+
+Then the code appends these to the main dataframe and constructs:
+Pre-defense table: baseline + all attacks.
+Post-defense table: baseline + worst attack + 3 defense winners.
+
+## B.10 Terminal output and CSV persistence
+
+Prints exactly two terminal tables (pre and post).
+Writes:
+`results/FINAL_TABLE_PRE_DEFENSE.csv`
+`results/FINAL_TABLE_POST_DEFENSE.csv`
+`results/metrics_terminal.txt` (terminal capture).
+
+## B.11 OWL population
+
+Builds `results/attack_results.csv` (compact).
+Exports `results/ontology_graph_snapshot.json` (dataset semantics).
+Calls `generate_reasoned_ontology(...)` producing `ontology/gnn_attack_reasoned.owl`.
+
+## B.12 Figures
+
+Graph diff:
+If worst attack is structural, edges differ; if feature-only, node rings show changed features and prediction changes.
+
+Class clusters:
+Uses embeddings from `gcn.get_embeddings(...)` and optionally defended embeddings.
+
+Workflow and architecture diagrams:
+Uses `visualization/paper_diagrams.py`.
+
+## B.13 Dynamic dataset snapshots
+
+Generates 4 snapshots and stores them as `.pt` files under `data/dynamic/`.
+Also exports dynamic graph metrics CSV if possible.
+
+---
+
+# APPENDIX C: Ontology Schema (Extracted From Starter OWL)
+
+The starter OWL defines the symbolic schema.
+Counts (from parsing `ontology/gnn_attacks_ontology_starter.owl`):
+49 classes, 15 object properties, 24 datatype properties.
+
+## C.1 Classes (selection, full list is small enough)
+
+Core: `#Attack`, `#Defense`, `#Dataset`, `#Model`, `#ImpactMetric`, `#Perturbation`, `#OntologyRule`.
+Attack subclasses: `#EvasionAttack`, `#PoisoningAttack`, `#BackdoorAttack`, `#StructuralAttack`.
+Defense classes: `#SimilarityPruningDefense`, `#NeighborImportanceDefense`, `#LayerMemoryDefense`, `#GraphPurificationDefense`, `#FeatureSmootheningDefense`, `#AdversarialTrainingDefense`, `#SemanticRuleDefense`, `#SubgraphIsolationDefense`.
+Dataset semantics: `#Paper`, `#Topic`, `#CitationEdge`, `#FeatureVector`, `#ClassLabel`.
+Graph semantics: `#SuspiciousEdge`, `#BridgeEdge`, `#Neighborhood`, `#Community`, `#TriggerMotif`.
+Vulnerabilities: `#Vulnerability`, `#LowHomophilyVulnerability`, `#BridgeNodeVulnerability`, `#HighCentralityVulnerability`, `#TopicMismatchVulnerability`, `#SparseNeighborhoodVulnerability`.
+Defense planning: `#DefenseChain`, `#DefenseStage`.
+Metric classes: `#AccuracyMetric`, `#F1ScoreMetric`, `#AttackSuccessRate`, `#ModularityMetric`.
+Cora topics: `#CaseBased`, `#GeneticAlgorithms`, `#NeuralNetworks`, `#ProbabilisticMethods`, `#ReinforcementLearning`, `#RuleLearning`, `#Theory`.
+
+## C.2 Object properties (all)
+
+`#targetsDataset`, `#affectsModel`, `#mitigatedBy`, `#measuredBy`, `#usesRule`,
+`#hasTopic`, `#hasFeatureVector`, `#hasVulnerability`,
+`#citesPaper`, `#citesFrom`, `#citesTo`,
+`#recommendedChain`, `#hasDefenseStage`, `#nextDefenseStage`, `#stageDefense`.
+
+## C.3 Datatype properties (all)
+
+Severity and metadata:
+`#hasSeverityScore`, `#attackLabel`, `#attackType`, `#defenseLabel`.
+
+Core metrics:
+`#accuracyBefore`, `#accuracyAfterAttack`, `#accuracyAfterDefense`.
+
+Paper/node properties:
+`#paperId`, `#degree`, `#pagerank`, `#local_homophily`, `#neighbor_entropy`, `#topic_mismatch_frac`.
+
+Feature vector summary:
+`#numActiveFeatures`, `#topFeatureIds`.
+
+Edge semantic scores:
+`#cosine`, `#jaccard`, `#topicSimilarity`, `#citationTrust`, `#suspiciousReason`.
+
+Other:
+`#embeddingDrift`, `#vulnerabilityScore`, `#vulnerabilityType`, `#stageIndex`.
+
+## C.4 Starter individuals
+
+`#CoraDataset`, `#GCNModel`, `#MetaPoisonAttack`, `#JaccardEdgeFilter`, `#ImpactRun1`.
+
+---
+
+# APPENDIX D: Metrics Deep Dive (Definitions, Where Computed, How to Explain)
+
+This appendix answers:
+What every column means, where it is computed in code, and how to explain it scientifically.
+
+## D.1 Where metrics are computed in code
+
+Classification metrics live in `utils/metrics.py:compute_classification_metrics`.
+Robustness metrics live in `utils/metrics.py:compute_robustness_metrics`.
+Rows are assembled in `main.py:make_result_row`.
+Worst attack is selected by `main.py` using `Accuracy Drop`.
+
+## D.2 Column-by-column definitions (FINAL_TABLE_*.csv)
+
+`Model`
+GCN or GAT.
+
+`Attack`
+String label for baseline, each attack, and defense methods (defense entries contain “Defense:” in the name).
+
+`Accuracy`
+Test-set accuracy: fraction of correct predictions on `data.test_mask`.
+Computed by sklearn `accuracy_score` inside `compute_classification_metrics`.
+
+`Precision`, `Recall`
+Macro-averaged precision/recall (unweighted mean across classes).
+
+`F1`, `Macro F1`, `Micro F1`
+Macro F1 is class-balanced, micro F1 behaves like accuracy in multiclass.
+In your tables, `F1` duplicates macro F1 (the code writes both).
+
+`ROC-AUC`
+Multiclass one-vs-rest ROC-AUC (`roc_auc_score(..., multi_class='ovr')`) if probability matrix is available.
+
+`Log-loss`
+Cross-entropy on the test set computed from predicted probabilities.
+If model becomes confidently wrong, log-loss rises sharply.
+
+`Classification Margin`
+Implemented as mean(top1_prob - top2_prob) across test nodes.
+Interpreted as how “separated” the decision is; attacks reduce separation.
+
+`Robustness Score`
+Defined as `max(0, 1 - ASR)` where ASR is defined below.
+
+`Attack Success Rate`
+In this repo, ASR is defined as relative accuracy drop:
+`ASR = (acc_clean - acc_attack) / acc_clean`.
+This is not the same as targeted-ASR used in some attack papers.
+In a paper/viva, you must define ASR exactly as above.
+
+`Margin Drop`
+Difference in average margin: `margin_clean - margin_attack`.
+
+`Perturbation Rate`
+Fraction of entries changed.
+If adjacency: `(A != A') / (N*N)` using sparse nnz difference.
+If features: `(X != X') / (N*F)` using elementwise difference.
+Computed by `utils/metrics.py:perturbation_rate`.
+
+`Perturbation Budget`
+The “dial” for attack strength:
+edges flipped/added for structure attacks,
+flips per node for feature attacks,
+epsilon for FGSM-like attacks,
+and so on. In `main.py` these budgets are normalized to a single numeric.
+
+`Accuracy Drop`
+Computed as: `Accuracy(Baseline) - Accuracy(Attack)`.
+This is the impact metric used to choose the worst attack.
+
+## D.3 How to interpret a result scientifically (template)
+
+Use this template in your report/paper:
+
+1) Threat model statement:
+“We evaluate poisoning attacks (train-time perturbations with retraining) and evasion attacks (test-time perturbations without retraining).”
+
+2) Quantitative claim:
+“Attack X reduces GCN test accuracy from A to A-Δ and macro-F1 from F to F-ΔF, with perturbation rate r under budget b.”
+
+3) Mechanistic explanation:
+“The perturbation changes neighborhood mixing (message passing), producing embedding drift that increases class overlap, observed in the class cluster figure.”
+
+4) Defense claim:
+“Defense Y recovers accuracy by pruning low-trust edges, smoothing high-frequency feature noise, and repairing semantic contradictions; the recovered graph shows higher homophily and modularity.”
+
+## D.4 Important nuance in your current run (why some defenses do not improve)
+
+Your `results/metrics_terminal.txt` shows the worst attack is `Evasion: Gradient (FGSM-like)` with accuracy ~ 0.002 for GCN.
+This is an “extreme collapse regime.”
+
+In this regime:
+Pruning-based structural defenses cannot help much because adjacency is unchanged (feature attack).
+GNNGuard-style neighbor trust on representations can fail because:
+the representations themselves are corrupted by adversarial features.
+
+Ontology-only defense improves to ~0.101, but base-paper and combined remain near 0.002 in this run.
+This should be presented as:
+“FGSM-like global feature corruption is too strong for similarity/memory defenses, but semantic projection recovers partial performance.”
+
+If you need the narrative “attack hurts, defense recovers clearly,” you must constrain ε and/or attack scope so the attack remains in a defendable range.
+This is a scientific tuning problem, not a code bug.
+
+---
+
+# APPENDIX E: Plot-by-Plot Interpretation (What Each Figure Proves)
+
+This appendix gives “how to explain in viva” language for every generated plot in `results/`.
+
+## E.1 `FIG_clean_graph.png`
+
+Generated by: `main.py:save_clean_graph_plot`.
+Shows: a 300-node subgraph with nodes colored by class label.
+What to say:
+“This is a qualitative preview of the clean citation graph, showing class clusters and connectivity.”
+
+## E.2 `FIG_gcn_layerwise.png`, `FIG_gat_layerwise.png`
+
+Generated by: `visualization/paper_diagrams.py:draw_gcn_layerwise` and `draw_gat_layerwise`.
+Shows: input tensors, preprocessing (for GCN), layer formulas, intermediate outputs, and final classification.
+What to say:
+“These diagrams show exactly what the model computes per layer. Attacks work by corrupting X/A, which changes the aggregation outputs at each layer.”
+
+## E.3 `FIG_workflow.png`, `FIG_attack_defense_flow.png`
+
+Generated by: `visualization/paper_diagrams.py`.
+Shows: end-to-end experimental pipeline and clean->attack->defense storyline.
+What to say:
+“This provides the system-level architecture: dataset, training, attacks, metric evaluation, worst-attack selection, and defense comparison.”
+
+## E.4 `FIG_attack_suite.png`
+
+Generated by: `visualization/graph_viz.py:visualize_attack_suite`.
+Shows: per-attack subgraph visualization.
+What to say:
+“This is direct visual evidence that each attack changes the dataset. Structural attacks visibly add/remove edges; feature attacks ring nodes whose features changed.”
+
+## E.5 Worst-attack visual proofs
+
+`FIG_graph_diff_worst.png` (3 panels)
+Generated by: `visualization/graph_viz.py:visualize_graph_mosaic`.
+What to say:
+“This is the core qualitative evidence. It shows clean vs attacked vs defended on the same subgraph. The colored edges show what changed structurally, and the node rings show feature and prediction changes.”
+
+`FIG_worst_clean.png`, `FIG_worst_attacked.png`, `FIG_worst_defended.png`
+Generated by: `visualization/graph_viz.py:visualize_triplet_separate`.
+What to say:
+“These are aligned panels with identical coordinates, suitable for a paper figure or slide deck.”
+
+## E.6 `FIG_class_clusters.png`
+
+Generated by: `visualization/plotting.py:plot_tsne_suite` using PCA/SVD projection by default.
+Shows: 2D projection of hidden embeddings for clean, attacked, and defended datasets.
+What to say:
+“Attacks increase cluster overlap (embedding drift); defenses restore separation. This visually connects message passing corruption to classification failure.”
+
+---
+
+# APPENDIX F: How to Use the OWL Outputs in Protégé (Practical Steps)
+
+Files:
+`ontology/gnn_attacks_ontology_starter.owl` (schema)
+`ontology/gnn_attack_reasoned.owl` (populated individuals + metrics + defense chains)
+
+Steps:
+
+1) Open Protégé.
+2) File -> Open -> select `ontology/gnn_attack_reasoned.owl`.
+3) Explore Individuals:
+Paper individuals: `Paper_0`, `Paper_1`, ...
+Citation edges: `CitationEdge_u_v`.
+Vulnerabilities: `Vuln_<Type>_<PaperId>`.
+Attack runs: `Run_<id>_Attack`.
+Defense chains: `DefenseChain_Run_<id>` and stages.
+4) Run a reasoner (HermiT or Pellet).
+5) Query:
+Which edges are typed as `SuspiciousEdge`?
+Which papers have high vulnerability scores?
+Which defense chains are recommended for high severity attacks?
+
+Academic framing:
+“The OWL file provides an explainable symbolic layer: it records not only numeric results but also semantic context (topic membership, vulnerabilities) that can justify why a defense is selected.”
