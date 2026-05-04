@@ -267,7 +267,15 @@ class OntologySemanticDefense:
             + 0.3 * label_mismatch
             + 0.2 * neighbor_deviation
         )
-        suspicious_mask = suspicious_score > np.quantile(suspicious_score, 0.75)
+
+        # Use z-score threshold instead of fixed quantile.
+        # Quantile always flags 25% of nodes — even on a nearly-clean graph —
+        # causing unnecessary feature repair that hurts accuracy.
+        # Z-score: if suspicious scores are uniformly low (lightly attacked),
+        # σ is small so the threshold is high and almost no nodes are flagged.
+        s_mu = float(np.mean(suspicious_score))
+        s_sigma = float(np.std(suspicious_score)) + 1e-9
+        suspicious_mask = suspicious_score > max(s_mu + 1.5 * s_sigma, 0.40)
 
         x_sem = topic_scores @ affinity.T
         x_smooth = feature_smoothing(adj_def, x, alpha=0.65)
@@ -276,8 +284,9 @@ class OntologySemanticDefense:
         x_repair[suspicious_mask] = (1.0 - repair_strength) * x[suspicious_mask] + repair_strength * x_consensus[suspicious_mask]
         x_repair = np.clip(x_repair.astype(np.float32), 0.0, 1.0)
 
-        # Optional mild reconstruction for severe semantic corruption.
-        if float(np.mean(suspicious_mask)) > 0.15:
+        # kNN reconstruction only for heavily attacked graphs (many suspicious nodes).
+        # Old trigger of 0.15 always fired because the quantile mask gave exactly 25%.
+        if float(np.mean(suspicious_mask)) > 0.40:
             adj_knn = knn_graph_reconstruction(x_repair, k=8)
             adj_def = _symmetrize((adj_def + adj_knn).sign().tocsr())
 
@@ -323,11 +332,15 @@ class TripleDefense:
         )
 
     def ontology_only(self, data: Data) -> DefenseOutcome:
-        return self.ontology.apply(data, support_scale=0.75, repair_strength=0.30)
+        # Lower support_scale reduces cross-topic edge pruning aggressiveness.
+        # Cora has ~19% legitimate cross-topic citations; pruning them hurts.
+        return self.ontology.apply(data, support_scale=0.35, repair_strength=0.30)
 
     def hybrid(self, data: Data) -> DefenseOutcome:
         structural_out = self.structural(data)
-        ontology_out = self.ontology.apply(structural_out.data, support_scale=0.62, repair_strength=0.18)
+        # After structural cleaning, remaining cross-topic edges are mostly legitimate;
+        # use a low support_scale to preserve them.
+        ontology_out = self.ontology.apply(structural_out.data, support_scale=0.25, repair_strength=0.18)
         return DefenseOutcome(
             name="HybridDefense",
             data=ontology_out.data,

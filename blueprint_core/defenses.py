@@ -1,112 +1,118 @@
 import torch
 import torch.nn.functional as F
 
-# --- Helpers ---
 
-def normalized_adj(data):
-    """Mock normalized adjacency matrix for feature smoothing."""
-    num_nodes = data.x.size(0)
-    adj = torch.zeros((num_nodes, num_nodes), device=data.x.device)
-    adj[data.edge_index[0], data.edge_index[1]] = 1.0
-    adj += torch.eye(num_nodes, device=data.x.device) # Add self loops
-    deg = adj.sum(dim=1)
-    d_inv_sqrt = torch.pow(deg, -0.5)
-    d_inv_sqrt[torch.isinf(d_inv_sqrt)] = 0.
-    d_mat_inv_sqrt = torch.diag(d_inv_sqrt)
-    return d_mat_inv_sqrt @ adj @ d_mat_inv_sqrt
+# ── helpers ───────────────────────────────────────────────────────────────────
 
-def get_neighbors(data, node):
-    """Get neighbor indices for a given node."""
-    edges = data.edge_index
-    neighbors = edges[1, edges[0] == node]
-    # Include self
-    return torch.cat([neighbors, torch.tensor([node], device=data.x.device)])
+def _neighbor_mean(data):
+    """Sparse per-node mean of neighbour features (no dense N×N matrix)."""
+    src, dst = data.edge_index
+    deg = torch.zeros(data.num_nodes, device=data.x.device)
+    deg.scatter_add_(0, dst, torch.ones(dst.size(0), device=data.x.device))
+    deg = deg.clamp(min=1)
+    nb_sum = torch.zeros_like(data.x)
+    nb_sum.index_add_(0, dst, data.x[src])
+    return nb_sum / deg.unsqueeze(1)
 
-# --- 🟢 5.1 STRUCTURAL DEFENSE ---
 
-def prune_edges(data, threshold=0.2):
+def _class_prototypes(data):
+    """
+    Per-class mean feature vector from training nodes.
+
+    Even when ALL nodes are attacked, averaging ~20 training nodes per class
+    reduces individual noise by √20 ≈ 4.5×, yielding prototypes that are
+    substantially cleaner than individual attacked vectors.
+    """
+    num_classes = int(data.y.max().item()) + 1
+    prototypes = torch.zeros(num_classes, data.num_features, device=data.x.device)
+    counts = torch.zeros(num_classes, device=data.x.device)
+    for idx in data.train_mask.nonzero(as_tuple=True)[0]:
+        c = data.y[idx].item()
+        prototypes[c] += data.x[idx]
+        counts[c] += 1
+    counts = counts.clamp(min=1)
+    return prototypes / counts.unsqueeze(1)   # [C, F]
+
+
+# ── 5.1 STRUCTURAL DEFENSE ────────────────────────────────────────────────────
+
+def structural_defense(data, alpha=0.5, steps=2):
+    """
+    Laplacian smoothing: blend each node's features with the mean of its
+    graph neighbours (sparse, no dense N×N matrix).
+
+    Why no edge pruning: Cora's sparse L1-normalised BOW vectors have
+    naturally low pairwise cosine similarity (0.1–0.3 even for same-class
+    pairs), so a hard threshold prunes most legitimate edges and collapses
+    graph structure.
+
+    Why no post-clamp / renorm: the model tolerates mildly out-of-distribution
+    inputs better than aggressive renormalisation, which distorts feature
+    directions and drops signal below the noise floor.
+    """
     data = data.clone()
-    new_edges = []
-    
-    # We transpose to iterate over edge pairs (u, v)
-    edges_t = data.edge_index.T
-    for (u, v) in edges_t:
-        # compute cosine similarity
-        sim = F.cosine_similarity(data.x[u].unsqueeze(0), data.x[v].unsqueeze(0))
-        if sim.item() > threshold:
-            new_edges.append([u, v])
-            
-    if new_edges:
-        data.edge_index = torch.tensor(new_edges, dtype=torch.long, device=data.edge_index.device).T
-    else:
-        # Fallback if everything is pruned
-        data.edge_index = torch.empty((2, 0), dtype=torch.long, device=data.edge_index.device)
+    for _ in range(steps):
+        data.x = alpha * data.x + (1 - alpha) * _neighbor_mean(data)
     return data
 
-def smooth_features(data):
+
+# ── 5.2 ONTOLOGY DEFENSE ─────────────────────────────────────────────────────
+
+def ontology_defense(data, blend=0.3):
+    """
+    Prototype-based semantic projection using Cora's topic ontology.
+
+    Semantic knowledge: each paper belongs to one of seven topic classes
+    (Neural Networks, Case-Based, Genetic Algorithms, …).  Training nodes
+    (with known labels) define per-class feature prototypes — the "semantic
+    centroid" of each topic in feature space.
+
+    Even when all node features are globally attacked, the class prototype is
+    the mean of ~20 training vectors, reducing per-feature noise by √20 ≈ 4.5×.
+    Each test node is then softly projected 30% toward its nearest prototype,
+    pulling its features back toward the correct topic's semantic centre
+    without destroying its individual signal.
+
+    This is ontology-guided because the correction is driven by symbolic class
+    membership (topic identity), not purely by raw geometric similarity.
+    """
     data = data.clone()
-    adj_norm = normalized_adj(data)
-    data.x = torch.matmul(adj_norm, data.x)
+    prototypes = _class_prototypes(data)                    # [C, F]
+
+    # Nearest prototype by cosine similarity
+    x_norm = F.normalize(data.x, p=2, dim=1)
+    p_norm = F.normalize(prototypes, p=2, dim=1)
+    nearest = torch.mm(x_norm, p_norm.T).argmax(dim=1)     # [N]
+
+    # Soft blend toward nearest class prototype
+    data.x = (1 - blend) * data.x + blend * prototypes[nearest]
     return data
 
-# --- 🟢 5.2 ONTOLOGY DEFENSE ---
 
-# Step 1: Build Ontology (Mock)
-ontology = {
-    0: "AI",
-    1: "AI",
-    2: "DB",
-    3: "Theory",
-    4: "ML"
-}
-
-def is_consistent(feature_vector, ontology):
-    """Mock ontology check. 
-    Assume inconsistency if feature vector norm is wildly distorted."""
-    return feature_vector.norm().item() < 50.0 
-
-def detect_ontology_violation(data):
-    attacked_nodes = []
-    for node in range(data.num_nodes):
-        if not is_consistent(data.x[node], ontology):
-            attacked_nodes.append(node)
-    return attacked_nodes
-
-def correct_features(data, attacked_nodes):
-    data = data.clone()
-    for node in attacked_nodes:
-        neighbors = get_neighbors(data, node)
-        if len(neighbors) > 0:
-            data.x[node] = data.x[neighbors].mean(dim=0)
-    return data
-
-def ontology_defense(data):
-    """Apply standalone ontology defense."""
-    data = data.clone()
-    attacked_nodes = detect_ontology_violation(data)
-    data = correct_features(data, attacked_nodes)
-    return data
-
-# --- 🟣 5.3 HYBRID DEFENSE ---
+# ── 5.3 HYBRID DEFENSE ───────────────────────────────────────────────────────
 
 def hybrid_defense(data):
+    """
+    Two-stage pipeline: semantic projection first, then graph smoothing.
+
+    Order matters: smoothing after prototype blending propagates topic-aligned
+    features across the graph rather than averaging raw noisy signals.
+    """
     data = data.clone()
-    data = prune_edges(data)
-    data = smooth_features(data)
-    
-    attacked_nodes = detect_ontology_violation(data)
-    data = correct_features(data, attacked_nodes)
-    
+    data = ontology_defense(data)
+    data = structural_defense(data, alpha=0.7, steps=1)
     return data
 
+
+# ── public API ────────────────────────────────────────────────────────────────
+
 def apply_defenses(attacked_data_dict):
-    """Apply defenses to each attacked graph. Returns dictionary mapping attack -> defenses applied."""
     defended_dict = {}
-    for attack_name, data in attacked_data_dict.items():
+    for attack_name, attacked_data in attacked_data_dict.items():
         defended_dict[attack_name] = {
-            "attacked": data,
-            "structural": smooth_features(prune_edges(data)),
-            "ontology": ontology_defense(data),
-            "hybrid": hybrid_defense(data)
+            "attacked":   attacked_data,
+            "structural": structural_defense(attacked_data),
+            "ontology":   ontology_defense(attacked_data),
+            "hybrid":     hybrid_defense(attacked_data),
         }
     return defended_dict
